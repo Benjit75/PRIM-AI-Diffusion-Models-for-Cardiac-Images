@@ -5,6 +5,7 @@ import shutil
 
 import matplotlib.pyplot as plt
 import nibabel as nib
+import numpy as np
 import pandas as pd
 from tqdm.notebook import tqdm
 
@@ -130,6 +131,53 @@ class DataLoader:
         """
         return self.data.pop(key, {})
 
+    def standardize_images(self) -> tuple[int, int, int]:
+        """
+        Standardize images by ensuring the aspect ratio X/Y <= 1 and resizing to the maximum dimensions.
+
+        Returns:
+        tuple[int, int, int]: The maximum dimensions (height, width, depth).
+        """
+        # Step 1: Determine the maximum dimensions
+        max_height = 0
+        max_width = 0
+        max_depth = 0
+
+        for dataset_key, dataset in self.data.items():
+            for patient, patient_data in dataset.items():
+                for image_name, image in patient_data['image_data'].items():
+                    # Ensure aspect ratio X/Y <= 1
+                    if image.shape[0] < image.shape[1]:
+                        image = np.transpose(image, [1, 0, 2])
+                    if image.shape[1] < image.shape[2]:
+                        image = np.transpose(image, [0, 2, 1])
+                    # Update the maximum shape
+                    max_height = max(max_height, image.shape[0])
+                    max_width = max(max_width, image.shape[1])
+                    max_depth = max(max_depth, image.shape[2])
+
+        target_shape = (max_height, max_width, max_depth)
+
+        # Step 2: Resize each image to the maximum dimensions
+        for dataset_key, dataset in self.data.items():
+            for patient, patient_data in tqdm(dataset.items(), desc=f"Standardizing images in '{dataset_key}'"):
+                resized_images = {}
+                for image_name, image in patient_data['image_data'].items():
+                    # Ensure aspect ratio X/Y <= 1
+                    if image.shape[0] < image.shape[1]:
+                        image = np.transpose(image, [1, 0, 2])
+                    if image.shape[1] < image.shape[2]:
+                        image = np.transpose(image, [0, 2, 1])
+                    # Resize the image to the maximum shape
+                    resized_image = np.zeros(target_shape)
+                    start_x = (target_shape[0] - image.shape[0]) // 2
+                    start_y = (target_shape[1] - image.shape[1]) // 2
+                    start_z = (target_shape[2] - image.shape[2]) // 2
+                    resized_image[start_x:start_x + image.shape[0], start_y:start_y + image.shape[1], start_z:start_z + image.shape[2]] = image
+                    resized_images[image_name] = resized_image
+                patient_data['image_data_resized'] = resized_images
+
+        return target_shape
 
 class DataDisplayer:
     def __init__(self, data_loader: DataLoader, group_map: dict):
@@ -245,3 +293,29 @@ class DataDisplayer:
             axs[i].imshow(data[id_example]['image_data'][im_type][:, :, 0], cmap='gray')
             axs[i].set_title(f"{im_type}")
         plt.show()
+
+    def display_data_arborescence(self, data_name:str, start_level:int=0, start_prefix:str="", max_keys:int=None, max_depth:int=None) -> None:
+        """
+        Display the data arborescence.
+        :param data_name: name of the data root dictionary
+        :param start_level: level of the data dictionary to start from
+        :param start_prefix: prefix to start with
+        :param max_keys: maximum number of keys to display per level
+        :param max_depth: maximum depth to display
+        """
+        def display_data_arborescence_recursive(data:dict, level, prefix):
+            nonlocal max_keys, max_depth
+            keys = list(data.keys())
+            for i, key in enumerate(keys):
+                if max_keys is not None and i >= max_keys:
+                    print(prefix + "├── ...")
+                    break
+                print(prefix + "├── " + key)
+                if isinstance(data[key], dict) and (max_depth is None or level < max_depth):
+                    display_data_arborescence_recursive(
+                        data[key],
+                        level=level + 1,
+                        prefix=prefix + "│\t",
+                    )
+        print(start_prefix + data_name)
+        display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
