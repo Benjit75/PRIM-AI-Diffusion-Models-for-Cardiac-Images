@@ -25,21 +25,21 @@ class ConvBlock(nn.Module):
         super(ConvBlock, self).__init__()
         self.ndim = ndim
 
-        match self.ndim:
-            case 1:
-                self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.norm = nn.BatchNorm1d(out_channels)
-            case 2:
-                self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.norm = nn.BatchNorm2d(out_channels)
-            case 3:
-                self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
-                self.norm = nn.BatchNorm3d(out_channels)
-            case _:
-                raise ValueError(f"Unsupported ndim: {self.ndim}")
+        if self.ndim == 1:
+            self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.norm = nn.BatchNorm1d(out_channels)
+        elif self.ndim == 2:
+            self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.norm = nn.BatchNorm2d(out_channels)
+        elif self.ndim == 3:
+            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size, stride=stride, padding=padding)
+            self.norm = nn.BatchNorm3d(out_channels)
+        else:
+            raise ValueError(f"Unsupported ndim: {self.ndim}")
+
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
@@ -55,15 +55,14 @@ class Encoder(nn.Module):
         layers = []
         for i in range(len(features_dims) - 1):
             layers.append(ConvBlock(in_channels if i == 0 else features_dims[i], features_dims[i + 1], self.ndim))
-            match self.ndim:
-                case 1:
-                    layers.append(nn.MaxPool1d(2))
-                case 2:
-                    layers.append(nn.MaxPool2d(2))
-                case 3:
-                    layers.append(nn.MaxPool3d(2))
-                case _:
-                    raise ValueError(f"Unsupported ndim: {self.ndim}")
+            if self.ndim == 1:
+                layers.append(nn.MaxPool1d(2))
+            elif self.ndim == 2:
+                layers.append(nn.MaxPool2d(2))
+            elif self.ndim == 3:
+                layers.append(nn.MaxPool3d(2))
+            else:
+                raise ValueError(f"Unsupported ndim: {self.ndim}")
         self.enc_blocks = nn.ModuleList(layers)
 
     def forward(self, x):
@@ -101,15 +100,14 @@ class CrossAttention(nn.Module):
         out = torch.bmm(attn_weights, v).transpose(1, 2)
 
         # Reshape back to batch, channels, height, width, depth
-        match self.ndim:
-            case 1:
-                return out.view(b, c, spatial_dims[0])
-            case 2:
-                return out.view(b, c, spatial_dims[0], spatial_dims[1])
-            case 3:
-                return out.view(b, c, spatial_dims[0], spatial_dims[1], spatial_dims[2])
-            case _:
-                raise ValueError(f"Unsupported ndim: {self.ndim}")
+        if self.ndim == 1:
+            return out.view(b, c, spatial_dims[0])
+        elif self.ndim == 2:
+            return out.view(b, c, spatial_dims[0], spatial_dims[1])
+        elif self.ndim == 3:
+            return out.view(b, c, spatial_dims[0], spatial_dims[1], spatial_dims[2])
+        else:
+            raise ValueError(f"Unsupported ndim: {self.ndim}")
 
 
 class Decoder(nn.Module):
@@ -119,25 +117,23 @@ class Decoder(nn.Module):
         self.decoders = nn.ModuleList()
         self.ndim = ndim
         for i in range(len(feature_dims) - 1, 0, -1):
-            match self.ndim:
-                case 1:
-                    self.upsamples.append(nn.ConvTranspose1d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
-                case 2:
-                    self.upsamples.append(nn.ConvTranspose2d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
-                case 3:
-                    self.upsamples.append(nn.ConvTranspose3d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
-                case _:
-                    raise ValueError(f"Unsupported ndim: {self.ndim}")
-            self.decoders.append(ConvBlock(feature_dims[i], feature_dims[i-1], self.ndim))
-        match self.ndim:
-            case 1:
-                self.final_conv = nn.Conv1d(feature_dims[0], out_channels, kernel_size=1)
-            case 2:
-                self.final_conv = nn.Conv2d(feature_dims[0], out_channels, kernel_size=1)
-            case 3:
-                self.final_conv = nn.Conv3d(feature_dims[0], out_channels, kernel_size=1)
-            case _:
+            if self.ndim == 1:
+                self.upsamples.append(nn.ConvTranspose1d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
+            elif self.ndim == 2:
+                self.upsamples.append(nn.ConvTranspose2d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
+            elif self.ndim == 3:
+                self.upsamples.append(nn.ConvTranspose3d(feature_dims[i], feature_dims[i-1], kernel_size=2, stride=2))
+            else:
                 raise ValueError(f"Unsupported ndim: {self.ndim}")
+            self.decoders.append(ConvBlock(feature_dims[i], feature_dims[i-1], self.ndim))
+        if self.ndim == 1:
+            self.final_conv = nn.Conv1d(feature_dims[0], out_channels, kernel_size=1)
+        elif self.ndim == 2:
+            self.final_conv = nn.Conv2d(feature_dims[0], out_channels, kernel_size=1)
+        elif self.ndim == 3:
+            self.final_conv = nn.Conv3d(feature_dims[0], out_channels, kernel_size=1)
+        else:
+            raise ValueError(f"Unsupported ndim: {self.ndim}")
 
     def forward(self, x, enc_features, cond):
         for i in range(len(self.upsamples)):
@@ -162,13 +158,12 @@ class MedSegDiff(nn.Module):
         # Step 1: Embed the time step
         t_emb = self.time_embedding(time_step)
         # Add time embedding to the input
-        match self.ndim:
-            case 1:
-                x += t_emb[:, :, None]
-            case 2:
-                x += t_emb[:, :, None, None]
-            case 3:
-                x += t_emb[:, :, None, None, None]
+        if self.ndim == 1:
+            x += t_emb[:, :, None]
+        elif self.ndim == 2:
+            x += t_emb[:, :, None, None]
+        elif self.ndim == 3:
+            x += t_emb[:, :, None, None, None]
 
         # Step 2: Encode the noisy input mask with skip connections
         enc_features = self.encoder(x)

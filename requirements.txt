@@ -1,6 +1,9 @@
 matplotlib
 nibabel
 numpy
+opencv-python
 pandas
+pytest
+scikit-learn
 torch
 tqdm

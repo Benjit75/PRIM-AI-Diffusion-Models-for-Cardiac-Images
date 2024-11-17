@@ -3,6 +3,7 @@ import os
 from typing import Optional
 import shutil
 
+import cv2
 import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
@@ -67,7 +68,7 @@ class DataLoader:
                             metadata[key] = value
         return metadata
 
-    def load_data(self, sub_path: str, name: Optional[str]=None, store: Optional[bool]=False) -> dict:
+    def load_data(self, sub_path: str, name: Optional[str] = None, store: Optional[bool] = False) -> dict:
         """
         Load data from a subpath and optionally store it.
 
@@ -131,53 +132,34 @@ class DataLoader:
         """
         return self.data.pop(key, {})
 
-    def standardize_images(self) -> tuple[int, int, int]:
+    def extract_specific_images(self,
+                                data_names: Optional[list[str]] = None,
+                                group_names: Optional[list[str]] = None,
+                                image_types: Optional[list[str]] = None,
+                                image_names: Optional[list[str]] = None) -> list[np.ndarray]:
         """
-        Standardize images by ensuring the aspect ratio X/Y <= 1 and resizing to the maximum dimensions.
-
-        Returns:
-        tuple[int, int, int]: The maximum dimensions (height, width, depth).
+        Extract images from the data, filtered by image names and group names.
+        :param data_names: names of the data to extract, or None to extract all (ex: 'train', 'test')
+        :param group_names: names of the groups to extract, or None to extract all (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
+        :param image_types: types of the images to extract, or None to extract all (ex: 'image_data', 'image_interest_part_data')
+        :param image_names: names of the images to extract, or None to extract all (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
+        :return: A numpy array containing the extracted images, in a flattened list.
         """
-        # Step 1: Determine the maximum dimensions
-        max_height = 0
-        max_width = 0
-        max_depth = 0
+        images = []
+        for dataset_key, dataset in self.data.items():  # Iterate over the datasets
+            if data_names is None or dataset_key in data_names:  # Check if the dataset should be extracted
+                for patient, patient_data in tqdm(dataset.items(),
+                                                  desc=f"Extracting images in '{dataset_key}'"):  # Iterate over the patients
+                    if group_names is None or patient_data[
+                        'group'] in group_names:  # Check if the patient is in a group to extract
+                        for image_type, image_data in patient_data.items():  # Iterate over the image types
+                            if isinstance(image_data, dict):  # Check if the image data is a dictionary
+                                if image_types is None or image_type in image_types:  # Check if the image type should be extracted
+                                    for image_name, image in image_type.items():  # Iterate over the images
+                                        if image_names is None or image_name in image_names:
+                                            images.append(patient_data['image_data'][image_name])
+        return images
 
-        for dataset_key, dataset in self.data.items():
-            for patient, patient_data in dataset.items():
-                for image_name, image in patient_data['image_data'].items():
-                    # Ensure aspect ratio X/Y <= 1
-                    if image.shape[0] < image.shape[1]:
-                        image = np.transpose(image, [1, 0, 2])
-                    if image.shape[1] < image.shape[2]:
-                        image = np.transpose(image, [0, 2, 1])
-                    # Update the maximum shape
-                    max_height = max(max_height, image.shape[0])
-                    max_width = max(max_width, image.shape[1])
-                    max_depth = max(max_depth, image.shape[2])
-
-        target_shape = (max_height, max_width, max_depth)
-
-        # Step 2: Resize each image to the maximum dimensions
-        for dataset_key, dataset in self.data.items():
-            for patient, patient_data in tqdm(dataset.items(), desc=f"Standardizing images in '{dataset_key}'"):
-                resized_images = {}
-                for image_name, image in patient_data['image_data'].items():
-                    # Ensure aspect ratio X/Y <= 1
-                    if image.shape[0] < image.shape[1]:
-                        image = np.transpose(image, [1, 0, 2])
-                    if image.shape[1] < image.shape[2]:
-                        image = np.transpose(image, [0, 2, 1])
-                    # Resize the image to the maximum shape
-                    resized_image = np.zeros(target_shape)
-                    start_x = (target_shape[0] - image.shape[0]) // 2
-                    start_y = (target_shape[1] - image.shape[1]) // 2
-                    start_z = (target_shape[2] - image.shape[2]) // 2
-                    resized_image[start_x:start_x + image.shape[0], start_y:start_y + image.shape[1], start_z:start_z + image.shape[2]] = image
-                    resized_images[image_name] = resized_image
-                patient_data['image_data_resized'] = resized_images
-
-        return target_shape
 
 class DataDisplayer:
     def __init__(self, data_loader: DataLoader, group_map: dict):
@@ -206,7 +188,8 @@ class DataDisplayer:
                 })
         return pd.DataFrame(records)
 
-    def filter(self, data_name: Optional[str] = None, groups: Optional[list] = None, ids: Optional[list] = None) -> pd.DataFrame:
+    def filter(self, data_name: Optional[str] = None, groups: Optional[list] = None,
+               ids: Optional[list] = None) -> pd.DataFrame:
         """
         Filter the DataFrame based on the provided parameters.
         :param data_name: name of the data
@@ -223,7 +206,10 @@ class DataDisplayer:
             df = df[df['id'].isin(ids)]
         return df
 
-    def display_examples(self, data_name: Optional[str] = None, groups: Optional[list] = None, ids: Optional[list] = None, sort_by: Optional[tuple] = None, nb_examples: Optional[int] = None, per_combination: bool = False, format_sep: Optional[tuple[str]] = None, format_categories: Optional[tuple[str]] = None) -> None:
+    def display_examples(self, data_name: Optional[str] = None, groups: Optional[list] = None,
+                         ids: Optional[list] = None, sort_by: Optional[tuple] = None, nb_examples: Optional[int] = None,
+                         per_combination: bool = False, format_sep: Optional[tuple[str]] = None,
+                         format_categories: Optional[tuple[str]] = None) -> None:
         """
         Display examples based on the provided parameters.
         :param data_name: name of the data
@@ -240,9 +226,11 @@ class DataDisplayer:
         if nb_examples is not None:
             if per_combination:
                 if sort_by[-1] == 'id':
-                    df = df.groupby(list(sort_by[:-1])).apply(lambda x: x.sample(min(nb_examples, len(x)))).reset_index(drop=True).sort_values(list(sort_by))
+                    df = df.groupby(list(sort_by[:-1])).apply(lambda x: x.sample(min(nb_examples, len(x)))).reset_index(
+                        drop=True).sort_values(list(sort_by))
                 else:
-                    df = df.groupby(list(sort_by)).apply(lambda x: x.sample(min(nb_examples, len(x)))).reset_index(drop=True).sort_values(list(sort_by))
+                    df = df.groupby(list(sort_by)).apply(lambda x: x.sample(min(nb_examples, len(x)))).reset_index(
+                        drop=True).sort_values(list(sort_by))
             else:
                 df = df.sample(min(nb_examples, len(df))).sort_values(list(sort_by))
 
@@ -278,7 +266,9 @@ class DataDisplayer:
             "group": data[id_example]['group'],
             "nb_frames": data[id_example]['nb_frames']
         }
-        print(indentation + "ID: {ID}, height: {height}, weight: {weight}, group: {group}, nb_frames: {nb_frames}".format(**metadata))
+        print(
+            indentation + "ID: {ID}, height: {height}, weight: {weight}, group: {group}, nb_frames: {nb_frames}".format(
+                **metadata))
 
     def display_images(self, data_name: str, id_example: str) -> None:
         """
@@ -294,7 +284,8 @@ class DataDisplayer:
             axs[i].set_title(f"{im_type}")
         plt.show()
 
-    def display_data_arborescence(self, data_name:str, start_level:int=0, start_prefix:str="", max_keys:int=None, max_depth:int=None) -> None:
+    def display_data_arborescence(self, data_name: str, start_level: int = 0, start_prefix: str = "",
+                                  max_keys: int = None, max_depth: int = None) -> None:
         """
         Display the data arborescence.
         :param data_name: name of the data root dictionary
@@ -303,7 +294,8 @@ class DataDisplayer:
         :param max_keys: maximum number of keys to display per level
         :param max_depth: maximum depth to display
         """
-        def display_data_arborescence_recursive(data:dict, level, prefix):
+
+        def display_data_arborescence_recursive(data: dict, level, prefix):
             nonlocal max_keys, max_depth
             keys = list(data.keys())
             for i, key in enumerate(keys):
@@ -317,5 +309,91 @@ class DataDisplayer:
                         level=level + 1,
                         prefix=prefix + "│\t",
                     )
+
         print(start_prefix + data_name)
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
+
+
+class DataTransformer:
+    """
+    DataTransformer class to transform image data from a DataLoader.
+    """
+
+    def __init__(self, data_loader: DataLoader):
+        """
+        Initialize the DataTransformer with a DataLoader.
+        :param data_loader: DataLoader instance where the data is stored.
+        """
+        self.data_loader = data_loader
+
+    def find_images_max_dim(self,
+                            data_names: Optional[list[str]] = None,
+                            group_names: Optional[list[str]] = None,
+                            image_types: Optional[list[str]] = None,
+                            image_names: Optional[list[str]] = None) -> tuple[int, int]:
+        """
+        Detect max length of images in height and width dimensions in the desired data.
+        :param data_names: names of the data to extract, or None to extract all (ex: 'train', 'test')
+        :param group_names: names of the groups to extract, or None to extract all (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
+        :param image_types: types of the images to extract, or None to extract all (ex: 'image_data', 'image_interest_part_data')
+        :param image_names: names of the images to extract, or None to extract all (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
+        :return: The maximum dimensions (height, width).
+        """
+        max_height = 0
+        max_width = 0
+
+        selected_images = self.data_loader.extract_specific_images(data_names, group_names, image_types, image_names)
+        for image in selected_images:
+            height, width = image.shape[0], image.shape[1]
+            max_height = max(max_height, height)
+            max_width = max(max_width, width)
+
+        max_shape = (max_height, max_width)
+        return max_shape
+
+    def crop_to_interest_part(self) -> dict:
+        """
+        Detect the interesting part of the images, that is the part containing the heart.
+        Crop the images to the interesting part and pad them to a square-shaped image with unchanged depth.
+        :return: the dictionary of data_loader.data with added 'image_interest_part_data' key.
+        """
+        for dataset_key, dataset in self.data_loader.data.items():
+            for patient, patient_data in tqdm(dataset.items(), desc=f"Cropping to interesting part in '{dataset_key}'"):
+                images_interest_part = {}
+                for image_name, image in patient_data['image_data'].items():
+                    # Crop the interesting part of the image, that is the part containing the heart, by detecting the non-zero values
+                    non_zero_indices = np.nonzero(image)
+                    min_dim = [np.min(indices) for indices in non_zero_indices]
+                    max_dim = [np.max(indices) for indices in non_zero_indices]
+                    slices = tuple(slice(min_dim[dim], max_dim[dim] + 1) for dim in range(image.ndim))
+                    cropped_image = image[slices]
+
+                    # Pad the images to a square-shaped image with unchanged depth, centered on the cropped image
+                    padded_image = np.zeros(
+                        (max(cropped_image.shape[0:1]), max(cropped_image.shape[0:1]), cropped_image.shape[2]),
+                        dtype=cropped_image.dtype)
+                    pad_height = (padded_image.shape[0] - cropped_image.shape[0]) // 2
+                    pad_width = (padded_image.shape[1] - cropped_image.shape[1]) // 2
+                    padded_image[pad_height:pad_height + cropped_image.shape[0],
+                    pad_width:pad_width + cropped_image.shape[1], :] = cropped_image
+
+                    images_interest_part[image_name] = padded_image
+                patient_data['image_interest_part_data'] = images_interest_part
+        return self.data_loader.data
+
+    def standardize_images_to_shape(self, target_shape: tuple[int, int]) -> dict:
+        """
+        Standardize images by resizing them to a target shape along the height and width dimensions.
+        :param target_shape: target shape to resize the images to
+        :return: the dictionary of data_loader.data with added 'image_resized_data' key.
+        """
+        for dataset_key, dataset in self.data_loader.data.items():
+            for patient, patient_data in tqdm(dataset.items(), desc=f"Resizing images in '{dataset_key}'"):
+                images_resized = {}
+                for image_name, image in patient_data['image_interest_part_data'].items():
+                    resized_image = np.zeros((target_shape[0], target_shape[1], image.shape[2]), dtype=image.dtype)
+                    for i in range(image.shape[2]):
+                        resized_image[:, :, i] = cv2.resize(image[:, :, i], target_shape, interpolation=cv2.INTER_CUBIC)
+                    images_resized[image_name] = resized_image
+                patient_data['image_resized_data'] = images_resized
+        return self.data_loader.data
