@@ -1,2 +1,4 @@
 /database/
 /venv-PRIM
+.idea/
+**/__pycache__/**
