@@ -1,0 +1,43 @@
+data_loader_loaded.data
+├── train
+│	├── patient001
+│	│	├── image_data
+│	│	│	├── ED
+│	│	│	├── ED_gt
+│	│	│	├── ES
+│	│	│	├── ES_gt
+│	│	├── height
+│	│	├── weight
+│	│	├── group
+│	│	├── nb_frames
+│	├── patient002
+│	│	├── image_data
+│	│	│	├── ED
+│	│	│	├── ED_gt
+│	│	│	├── ES
+│	│	│	├── ES_gt
+│	│	├── height
+│	│	├── weight
+│	│	├── group
+│	│	├── nb_frames
+├── test
+│	├── patient101
+│	│	├── image_data
+│	│	│	├── ED
+│	│	│	├── ED_gt
+│	│	│	├── ES
+│	│	│	├── ES_gt
+│	│	├── height
+│	│	├── weight
+│	│	├── group
+│	│	├── nb_frames
+│	├── patient102
+│	│	├── image_data
+│	│	│	├── ED
+│	│	│	├── ED_gt
+│	│	│	├── ES
+│	│	│	├── ES_gt
+│	│	├── height
+│	│	├── weight
+│	│	├── group
+│	│	├── nb_frames

@@ -1,0 +1,5 @@
+data_name;group;id
+train;DCM;patient001
+train;DCM;patient002
+test;DCM;patient101
+test;NOR;patient102

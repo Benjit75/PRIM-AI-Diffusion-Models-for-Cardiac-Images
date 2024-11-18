@@ -150,14 +150,13 @@ class DataLoader:
             if data_names is None or dataset_key in data_names:  # Check if the dataset should be extracted
                 for patient, patient_data in tqdm(dataset.items(),
                                                   desc=f"Extracting images in '{dataset_key}'"):  # Iterate over the patients
-                    if group_names is None or patient_data[
-                        'group'] in group_names:  # Check if the patient is in a group to extract
+                    if group_names is None or patient_data['group'] in group_names:  # Check if the patient is in a group to extract
                         for image_type, image_data in patient_data.items():  # Iterate over the image types
                             if isinstance(image_data, dict):  # Check if the image data is a dictionary
                                 if image_types is None or image_type in image_types:  # Check if the image type should be extracted
-                                    for image_name, image in image_type.items():  # Iterate over the images
+                                    for image_name, image in image_data.items():  # Iterate over the images
                                         if image_names is None or image_name in image_names:
-                                            images.append(patient_data['image_data'][image_name])
+                                            images.append(image)
         return images
 
 
@@ -188,8 +187,8 @@ class DataDisplayer:
                 })
         return pd.DataFrame(records)
 
-    def filter(self, data_name: Optional[str] = None, groups: Optional[list] = None,
-               ids: Optional[list] = None) -> pd.DataFrame:
+    def filter(self, data_name: Optional[str] = None, groups: Optional[list[str]] = None,
+               ids: Optional[list[str]] = None) -> pd.DataFrame:
         """
         Filter the DataFrame based on the provided parameters.
         :param data_name: name of the data
@@ -206,8 +205,8 @@ class DataDisplayer:
             df = df[df['id'].isin(ids)]
         return df
 
-    def display_examples(self, data_name: Optional[str] = None, groups: Optional[list] = None,
-                         ids: Optional[list] = None, sort_by: Optional[tuple] = None, nb_examples: Optional[int] = None,
+    def display_examples(self, data_name: Optional[str] = None, groups: Optional[list[str]] = None,
+                         ids: Optional[list[str]] = None, sort_by: Optional[tuple[str]] = None, nb_examples: Optional[int] = None,
                          per_combination: bool = False, format_sep: Optional[tuple[str]] = None,
                          format_categories: Optional[tuple[str]] = None) -> None:
         """
@@ -251,12 +250,13 @@ class DataDisplayer:
             self.print_metadata(row['data_name'], row['id'], indent + "\t")
             self.display_images(row['data_name'], row['id'])
 
-    def print_metadata(self, data_name: str, id_example: str, indentation: str) -> None:
+    def print_metadata(self, data_name: str, id_example: str, indentation: str) -> str:
         """
         Print metadata for a specific example.
         :param data_name: name of the data
         :param id_example: id of the example
         :param indentation: indentation to use
+        :return: The formatted metadata
         """
         data = self.data_loader.data[data_name]
         metadata = {
@@ -266,9 +266,11 @@ class DataDisplayer:
             "group": data[id_example]['group'],
             "nb_frames": data[id_example]['nb_frames']
         }
-        print(
-            indentation + "ID: {ID}, height: {height}, weight: {weight}, group: {group}, nb_frames: {nb_frames}".format(
-                **metadata))
+        string_metadata = (indentation + "ID: {ID}, height: {height}, weight: {weight}, group: {group}, nb_frames: {nb_frames}"
+                           .format(**metadata))
+        print(string_metadata)
+
+        return string_metadata
 
     def display_images(self, data_name: str, id_example: str) -> None:
         """
@@ -285,7 +287,7 @@ class DataDisplayer:
         plt.show()
 
     def display_data_arborescence(self, data_name: str, start_level: int = 0, start_prefix: str = "",
-                                  max_keys: int = None, max_depth: int = None) -> None:
+                                  max_keys: int = None, max_depth: int = None) -> str:
         """
         Display the data arborescence.
         :param data_name: name of the data root dictionary
@@ -293,16 +295,18 @@ class DataDisplayer:
         :param start_prefix: prefix to start with
         :param max_keys: maximum number of keys to display per level
         :param max_depth: maximum depth to display
+        :return: The formatted data arborescence
         """
+        output = []
 
         def display_data_arborescence_recursive(data: dict, level, prefix):
             nonlocal max_keys, max_depth
             keys = list(data.keys())
             for i, key in enumerate(keys):
                 if max_keys is not None and i >= max_keys:
-                    print(prefix + "├── ...")
+                    output.append(prefix + "├── ...")
                     break
-                print(prefix + "├── " + key)
+                output.append(prefix + "├── " + key)
                 if isinstance(data[key], dict) and (max_depth is None or level < max_depth):
                     display_data_arborescence_recursive(
                         data[key],
@@ -310,8 +314,10 @@ class DataDisplayer:
                         prefix=prefix + "│\t",
                     )
 
-        print(start_prefix + data_name)
+        output.append(start_prefix + data_name)
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
+        print("\n".join(output))
+        return "\n".join(output)
 
 
 class DataTransformer:

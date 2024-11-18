@@ -1,0 +1,1 @@
+{'data_names': ["test"], 'image_types': ["image_data"], 'image_names': ["ED", "ED_gt"]}

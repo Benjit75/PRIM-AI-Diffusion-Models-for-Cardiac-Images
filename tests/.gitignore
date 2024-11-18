@@ -1,0 +1,5 @@
+/data/**/*.txt
+/data/**/*.nii
+/data/**/*.nii.gz
+/data/**/*.md
+/data/**/*.cfg

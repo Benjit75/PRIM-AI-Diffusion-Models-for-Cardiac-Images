@@ -1,0 +1,2 @@
+----ID: patient101, height: 169.0cm, weight: 79.0kg, group: DCM, nb_frames: 30
+####ID: patient002, height: 160.0cm, weight: 70.0kg, group: DCM, nb_frames: 30

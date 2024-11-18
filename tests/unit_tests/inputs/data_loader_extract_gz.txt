@@ -1,0 +1,8 @@
+training/patient001/patient001_frame01.nii.gz
+training/patient001/patient001_frame01_gt.nii.gz
+training/patient001/patient001_frame12.nii.gz
+training/patient001/patient001_frame12_gt.nii.gz
+testing/patient101/patient101_frame01.nii.gz
+testing/patient101/patient101_frame01_gt.nii.gz
+testing/patient101/patient101_frame14.nii.gz
+testing/patient101/patient101_frame14_gt.nii.gz
