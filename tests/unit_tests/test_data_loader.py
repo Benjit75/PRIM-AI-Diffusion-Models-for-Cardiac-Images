@@ -6,14 +6,7 @@ import numpy as np
 import pandas as pd
 import pickle
 
-
-def assert_dict_equal(d1, d2):
-    assert d1.keys() == d2.keys()
-    for key in d1:
-        if isinstance(d1[key], dict) and isinstance(d2[key], dict):
-            assert_dict_equal(d1[key], d2[key])
-        else:
-            assert np.array_equal(d1[key], d2[key])
+from tests.utils import assert_dict_equal
 
 
 def test_data_loader_read_metadata(data_loader, database_folder, data_loader_read_metadata_input_path, data_loader_read_metadata_expected_output_path):

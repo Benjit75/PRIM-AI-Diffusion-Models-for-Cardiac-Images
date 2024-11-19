@@ -1,7 +1,7 @@
 import pytest
 import os
 
-from data_manager.datamanager import DataLoader, DataDisplayer
+from data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
 
 # General paths
 @pytest.fixture
@@ -61,8 +61,13 @@ def data_loader_loaded(database_folder, data_sub_folders):
 def data_displayer(data_loader_loaded, group_map):
     return DataDisplayer(data_loader=data_loader_loaded, group_map=group_map)
 
+@pytest.fixture
+def data_transformer(data_loader_loaded):
+    return DataTransformer(data_loader_loaded)
+
 
 # Unit test paths
+
 ## DataLoader
 @pytest.fixture
 def data_loader_read_metadata_input_path(inputs_folder):
@@ -96,6 +101,7 @@ def data_loader_extract_specific_images_input_path(inputs_folder):
 def data_loader_extract_specific_images_expected_output_path(expected_outputs_folder):
     return os.path.join(expected_outputs_folder, "data_loader_extract_specific_images.txt")
 
+
 ## DataDisplayer
 @pytest.fixture
 def data_displayer_create_dataframe_expected_output_path(expected_outputs_folder):
@@ -124,3 +130,13 @@ def data_displayer_display_data_arborescence_input_path(inputs_folder):
 @pytest.fixture
 def data_displayer_display_data_arborescence_expected_output_path(expected_outputs_folder):
     return os.path.join(expected_outputs_folder, "data_displayer_display_data_arborescence.txt")
+
+
+# DataTransformer
+@pytest.fixture
+def data_transformer_find_images_max_dim_input_path(inputs_folder):
+    return os.path.join(inputs_folder, "data_transformer_find_images_max_dim.txt")
+
+@pytest.fixture
+def data_transformer_find_images_max_dim_expected_output_path(expected_outputs_folder):
+    return os.path.join(expected_outputs_folder, "data_transformer_find_images_max_dim.txt")
