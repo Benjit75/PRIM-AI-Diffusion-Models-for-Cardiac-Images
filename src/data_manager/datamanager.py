@@ -96,7 +96,10 @@ class DataLoader:
                         f"{id_subject}/{id_subject}_frame{metadata[image_type]:02}{image_suffix}.nii.gz"
                     )
                     extracted_image_path = self.extract_gz(image_path)
-                    image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata()
+                    if image_suffix == '_gt':
+                        image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata().astype(np.uint8)
+                    else:
+                        image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata()
             data[id_subject] = {"image_data": {k: v for k, v in image_data.items()},
                                 "height": metadata["Height"], "weight": metadata["Weight"],
                                 "group": metadata["Group"],
@@ -191,9 +194,9 @@ class DataDisplayer:
                ids: Optional[list[str]] = None) -> pd.DataFrame:
         """
         Filter the DataFrame based on the provided parameters.
-        :param data_name: name of the data
-        :param groups: groups to filter
-        :param ids: ids to filter
+        :param data_name: name of the data (ex: 'train', 'test')
+        :param groups: groups to filter (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
+        :param ids: ids to filter (ex: 'patient001', 'patient002', ...)
         :return: A filtered DataFrame.
         """
         df = self.data_df
@@ -205,16 +208,18 @@ class DataDisplayer:
             df = df[df['id'].isin(ids)]
         return df
 
-    def display_examples(self, data_name: Optional[str] = None, groups: Optional[list[str]] = None,
-                         ids: Optional[list[str]] = None, sort_by: Optional[tuple[str]] = None, nb_examples: Optional[int] = None,
+    def display_examples(self, image_type: str='image_data', data_name: Optional[str] = None,
+                         groups: Optional[list[str]] = None, ids: Optional[list[str]] = None,
+                         sort_by: Optional[tuple[str]] = None, nb_examples: Optional[int] = None,
                          per_combination: bool = False, format_sep: Optional[tuple[str]] = None,
                          format_categories: Optional[tuple[str]] = None) -> None:
         """
         Display examples based on the provided parameters.
-        :param data_name: name of the data
-        :param groups: groups to filter
-        :param ids: ids to filter
-        :param sort_by: optional tuple of columns to sort by
+        :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
+        :param data_name: name of the data (ex: 'train', 'test')
+        :param groups: groups to filter (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
+        :param ids: ids to filter (ex: 'patient001', 'patient002', ...)
+        :param sort_by: optional tuple of columns to sort by (ex: ('data_name', 'group', 'id'))
         :param nb_examples: number of examples to display
         :param per_combination: whether to sample nb_examples per combination of sort_by columns or globally
         :param format_sep: separator to display between sort_by columns
@@ -248,7 +253,7 @@ class DataDisplayer:
                         else:
                             print(indent + format_categories[i].format(current_sort_values[i]), end='')
             self.print_metadata(row['data_name'], row['id'], indent + "\t")
-            self.display_images(row['data_name'], row['id'])
+            self.display_images(row['data_name'], row['id'], image_type=image_type)
 
     def print_metadata(self, data_name: str, id_example: str, indentation: str) -> str:
         """
@@ -272,18 +277,19 @@ class DataDisplayer:
 
         return string_metadata
 
-    def display_images(self, data_name: str, id_example: str) -> None:
+    def display_images(self, data_name: str, id_example: str, image_type: str) -> None:
         """
         Display images for a specific example.
-        :param data_name: name of the data
-        :param id_example: id of the example
+        :param data_name: name of the data (ex: 'train', 'test')
+        :param id_example: id of the example (ex: 'patient001', 'patient002', ...)
+        :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
         """
         data = self.data_loader.data[data_name]
         fig, axs = plt.subplots(1, 4)
         fig.set_size_inches(10, 10)
-        for i, im_type in enumerate(['ED', 'ES', 'ED_gt', 'ES_gt']):
-            axs[i].imshow(data[id_example]['image_data'][im_type][:, :, 0], cmap='gray')
-            axs[i].set_title(f"{im_type}")
+        for i, im_name in enumerate(['ED', 'ES', 'ED_gt', 'ES_gt']):
+            axs[i].imshow(data[id_example][image_type][im_name][:, :, 0], cmap='gray')
+            axs[i].set_title(f"{im_name}")
         plt.show()
 
     def display_data_arborescence(self, data_name: str, start_level: int = 0, start_prefix: str = "",
@@ -316,7 +322,6 @@ class DataDisplayer:
 
         output.append(start_prefix + data_name)
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
-        print("\n".join(output))
         return "\n".join(output)
 
 
@@ -366,24 +371,32 @@ class DataTransformer:
         for dataset_key, dataset in self.data_loader.data.items():
             for patient, patient_data in tqdm(dataset.items(), desc=f"Cropping to interesting part in '{dataset_key}'"):
                 images_interest_part = {}
-                for image_name, image in patient_data['image_data'].items():
+                for image_name in ['ED', 'ES']:
+                    image = patient_data['image_data'][image_name]
+                    image_gt = patient_data['image_data'][f"{image_name}_gt"]
+
                     # Crop the interesting part of the image, that is the part containing the heart, by detecting the non-zero values
                     non_zero_indices = np.nonzero(image)
                     min_dim = [np.min(indices) for indices in non_zero_indices]
                     max_dim = [np.max(indices) for indices in non_zero_indices]
                     slices = tuple(slice(min_dim[dim], max_dim[dim] + 1) for dim in range(image.ndim))
                     cropped_image = image[slices]
+                    cropped_image_gt = image_gt[slices]
 
                     # Pad the images to a square-shaped image with unchanged depth, centered on the cropped image
-                    padded_image = np.zeros(
-                        (max(cropped_image.shape[0:1]), max(cropped_image.shape[0:1]), cropped_image.shape[2]),
-                        dtype=cropped_image.dtype)
-                    pad_height = (padded_image.shape[0] - cropped_image.shape[0]) // 2
-                    pad_width = (padded_image.shape[1] - cropped_image.shape[1]) // 2
-                    padded_image[pad_height:pad_height + cropped_image.shape[0],
-                    pad_width:pad_width + cropped_image.shape[1], :] = cropped_image
+                    pad_height = (max(cropped_image.shape[0:2]) - cropped_image.shape[0]) // 2 + 1
+                    pad_width = (max(cropped_image.shape[0:2]) - cropped_image.shape[1]) // 2 + 1
+
+                    padded_image = np.pad(cropped_image,
+                                          ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                                          mode='constant')
+                    padded_image_gt = np.pad(cropped_image_gt,
+                                             ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                                             mode='constant')
 
                     images_interest_part[image_name] = padded_image
+                    images_interest_part[f"{image_name}_gt"] = padded_image_gt
+
                 patient_data['image_interest_part_data'] = images_interest_part
         return self.data_loader.data
 

@@ -137,10 +137,10 @@ def test_data_transformer_crop_to_interest_part(data_transformer):
                 },
                 'group': 'NOR',
                 'image_interest_part_data': {
-                    'ED': np.ones((4, 4, 2)),
-                    'ED_gt': np.ones((4, 4, 2)),
-                    'ES': np.ones((5, 5, 3)),
-                    'ES_gt': np.ones((5, 5, 3))
+                    'ED': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((5, 5, 3)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((1, 1), (1, 1), (0, 0)), mode='constant')
                 }
             },
             'patient102': {
@@ -152,10 +152,10 @@ def test_data_transformer_crop_to_interest_part(data_transformer):
                 },
                 'group': 'MINF',
                 'image_interest_part_data': {
-                    'ED': np.ones((3, 3, 1)),
-                    'ED_gt': np.ones((3, 3, 1)),
-                    'ES': np.ones((4, 4, 2)),
-                    'ES_gt': np.ones((4, 4, 2))
+                    'ED': np.pad(np.ones((3, 3, 1)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant')
                 }
             }
         }

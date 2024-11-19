@@ -22,7 +22,10 @@ PRIM-AI-Diffusion-Models-for-Cardiac-Images
 │   │   ├───patient102
 │   │   │   ├───...
 │   │   ├───...
+├───src
+├───tests
+├───.gitattributes
 ├───.gitignore
 ├───README.md
-├───...
+├───requirements.txt
 ```

@@ -1,7 +1,7 @@
 import pytest
 import os
 
-from data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
+from src.data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
 
 # General paths
 @pytest.fixture
