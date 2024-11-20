@@ -1,6 +1,6 @@
 import gzip
 import os
-from typing import Optional
+from typing import Optional, Union
 import shutil
 
 import cv2
@@ -208,16 +208,17 @@ class DataDisplayer:
             df = df[df['id'].isin(ids)]
         return df
 
-    def display_examples(self, image_type: str='image_data', data_name: Optional[str] = None,
-                         groups: Optional[list[str]] = None, ids: Optional[list[str]] = None,
-                         sort_by: Optional[tuple[str]] = None, nb_examples: Optional[int] = None,
-                         per_combination: bool = False, format_sep: Optional[tuple[str]] = None,
-                         format_categories: Optional[tuple[str]] = None) -> None:
+    def display_examples(self, image_type: str='image_data', data_name: Optional[str]=None,
+                         groups: Optional[list[str]]=None, image_names: Optional[list[str]]=None,
+                         ids: Optional[list[str]]=None, sort_by: Optional[tuple[str]]=None,
+                         nb_examples: Optional[int]=None, per_combination: bool=False,
+                         format_sep: Optional[tuple[str]] = None, format_categories: Optional[tuple[str]] = None) -> None:
         """
         Display examples based on the provided parameters.
         :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
         :param data_name: name of the data (ex: 'train', 'test')
         :param groups: groups to filter (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
+        :param image_names: names of the images to extract, or None to extract all (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
         :param ids: ids to filter (ex: 'patient001', 'patient002', ...)
         :param sort_by: optional tuple of columns to sort by (ex: ('data_name', 'group', 'id'))
         :param nb_examples: number of examples to display
@@ -226,6 +227,9 @@ class DataDisplayer:
         :param format_categories: format to display for each sort_by column
         """
         df = self.filter(data_name, groups, ids)
+
+        if image_names is None:
+            image_names = ['ED', 'ES', 'ED_gt', 'ES_gt']
 
         if nb_examples is not None:
             if per_combination:
@@ -253,7 +257,7 @@ class DataDisplayer:
                         else:
                             print(indent + format_categories[i].format(current_sort_values[i]), end='')
             self.print_metadata(row['data_name'], row['id'], indent + "\t")
-            self.display_images(row['data_name'], row['id'], image_type=image_type)
+            self.display_images(row['data_name'], row['id'], image_type=image_type, image_names=image_names)
 
     def print_metadata(self, data_name: str, id_example: str, indentation: str) -> str:
         """
@@ -277,29 +281,30 @@ class DataDisplayer:
 
         return string_metadata
 
-    def display_images(self, data_name: str, id_example: str, image_type: str) -> None:
+    def display_images(self, data_name: str, id_example: str, image_type: str, image_names: list[str]) -> None:
         """
         Display images for a specific example.
         :param data_name: name of the data (ex: 'train', 'test')
         :param id_example: id of the example (ex: 'patient001', 'patient002', ...)
         :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
+        :param image_names: names of the images to extract (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
         """
         data = self.data_loader.data[data_name]
-        fig, axs = plt.subplots(1, 4)
+        fig, axs = plt.subplots(1, len(image_names))
         fig.set_size_inches(10, 10)
-        for i, im_name in enumerate(['ED', 'ES', 'ED_gt', 'ES_gt']):
+        for i, im_name in enumerate(image_names):
             axs[i].imshow(data[id_example][image_type][im_name][:, :, 0], cmap='gray')
             axs[i].set_title(f"{im_name}")
         plt.show()
 
     def display_data_arborescence(self, data_name: str, start_level: int = 0, start_prefix: str = "",
-                                  max_keys: int = None, max_depth: int = None) -> str:
+                                  max_keys: Union[int,dict[int, int]] = None, max_depth: int = None) -> str:
         """
         Display the data arborescence.
         :param data_name: name of the data root dictionary
         :param start_level: level of the data dictionary to start from
         :param start_prefix: prefix to start with
-        :param max_keys: maximum number of keys to display per level
+        :param max_keys: maximum number of keys to display per level (int or dict with level as key)
         :param max_depth: maximum depth to display
         :return: The formatted data arborescence
         """
@@ -309,7 +314,7 @@ class DataDisplayer:
             nonlocal max_keys, max_depth
             keys = list(data.keys())
             for i, key in enumerate(keys):
-                if max_keys is not None and i >= max_keys:
+                if (isinstance(max_keys, dict) and level in max_keys and i >= max_keys[level]) or (isinstance(max_keys, int) and i >= max_keys):
                     output.append(prefix + "├── ...")
                     break
                 output.append(prefix + "├── " + key)
@@ -362,57 +367,148 @@ class DataTransformer:
         max_shape = (max_height, max_width)
         return max_shape
 
-    def crop_to_interest_part(self) -> dict:
+    def crop_and_resize(self,
+                        target_shape: tuple[int, int]=(256, 256),
+                        image_names: Optional[list[str]]=None,
+                        link_gt_to_data: bool=True,
+                        keep_3d_consistency: bool=True,
+                        output_key: str='image_transformed_data',
+                        erase_previous_output: bool=True) -> dict:
         """
-        Detect the interesting part of the images, that is the part containing the heart.
-        Crop the images to the interesting part and pad them to a square-shaped image with unchanged depth.
-        :return: the dictionary of data_loader.data with added 'image_interest_part_data' key.
+        Crop the images to the interesting part and resize them to a target shape.
+        :param target_shape: Target shape to resize the images to.
+        :param image_names: List of image names to transform (e.g., ['ED', 'ES', 'ED_gt', 'ES_gt']).
+        :param link_gt_to_data: Whether to link the crop parameters of _gt images to their corresponding images.
+        :param keep_3d_consistency: Whether to perform the same crop for all layers of 3D images.
+        :param output_key: The key to store the transformed images in the data dictionary.
+        :param erase_previous_output: Whether to erase the previous output if it exists.
+        :return: The dictionary of data_loader.data with added output_key.
         """
+        if image_names is None:
+            image_names = ['ED', 'ES', 'ED_gt', 'ES_gt']
         for dataset_key, dataset in self.data_loader.data.items():
-            for patient, patient_data in tqdm(dataset.items(), desc=f"Cropping to interesting part in '{dataset_key}'"):
-                images_interest_part = {}
-                for image_name in ['ED', 'ES']:
+            for patient, patient_data in tqdm(dataset.items(), desc=f"Transforming images in '{dataset_key}'"):
+                if erase_previous_output or output_key not in patient_data:
+                    images_transformed = {}
+                else:
+                    images_transformed = patient_data[output_key]
+
+                for image_name in image_names:
                     image = patient_data['image_data'][image_name]
-                    image_gt = patient_data['image_data'][f"{image_name}_gt"]
+                    process_image_gt = False
+                    if link_gt_to_data and '_gt' in image_name:
+                        continue  # Skip _gt images if linking is enabled
+                    elif link_gt_to_data and f"{image_name}_gt" in image_names:
+                        image_gt_name = f"{image_name}_gt"
+                        if image_gt_name not in patient_data['image_data']:
+                            raise ValueError(f"Image '{image_gt_name}' not found in the data")
+                        image_gt = patient_data['image_data'][image_gt_name]
+                        if image.shape != image_gt.shape:
+                            raise ValueError(f"Image and image_gt shapes do not match for '{image_name}' and '{image_gt_name}'")
+                        process_image_gt = True
 
-                    # Crop the interesting part of the image, that is the part containing the heart, by detecting the non-zero values
-                    non_zero_indices = np.nonzero(image)
-                    min_dim = [np.min(indices) for indices in non_zero_indices]
-                    max_dim = [np.max(indices) for indices in non_zero_indices]
-                    slices = tuple(slice(min_dim[dim], max_dim[dim] + 1) for dim in range(image.ndim))
-                    cropped_image = image[slices]
-                    cropped_image_gt = image_gt[slices]
+                    if keep_3d_consistency:
+                        non_zero_indices = np.nonzero(image)
+                        if len(non_zero_indices[0]) == 0:
+                            resized_image = np.zeros(target_shape, dtype=image.dtype)
+                            if process_image_gt:
+                                resized_image_gt = np.zeros(target_shape, dtype=image_gt.dtype)
+                        else:
+                            min_dim = [np.min(indices) for indices in non_zero_indices]
+                            max_dim = [np.max(indices) for indices in non_zero_indices]
+                            slices = tuple(slice(min_dim[dim], max_dim[dim] + 1) for dim in range(image.ndim))
+                            cropped_image = image[slices]
 
-                    # Pad the images to a square-shaped image with unchanged depth, centered on the cropped image
-                    pad_height = (max(cropped_image.shape[0:2]) - cropped_image.shape[0]) // 2 + 1
-                    pad_width = (max(cropped_image.shape[0:2]) - cropped_image.shape[1]) // 2 + 1
+                            # Pad the cropped image to a square shape
+                            height, width = cropped_image.shape[:2]
+                            max_dim = max(height, width)
+                            pad_height = (max_dim - height) // 2
+                            pad_width = (max_dim - width) // 2
+                            padded_image = np.pad(cropped_image, ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                                                  mode='constant')
 
-                    padded_image = np.pad(cropped_image,
-                                          ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                                          mode='constant')
-                    padded_image_gt = np.pad(cropped_image_gt,
-                                             ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                                             mode='constant')
+                            # Resize the padded image to the target shape
+                            interpolation = cv2.INTER_CUBIC if target_shape[0] - 2 > padded_image.shape[0] else cv2.INTER_AREA
+                            resized_image = np.zeros((target_shape[0], target_shape[1], padded_image.shape[2]),
+                                                    dtype=padded_image.dtype)
+                            for i in range(padded_image.shape[2]):
+                                resized_image[1:target_shape[0]-1, 1:target_shape[1]-1, i] = (
+                                    cv2.resize(padded_image[:, :, i],
+                                               (target_shape[0] - 2, target_shape[1] - 2),
+                                               interpolation=interpolation))
 
-                    images_interest_part[image_name] = padded_image
-                    images_interest_part[f"{image_name}_gt"] = padded_image_gt
+                            # Process the _gt image if necessary
+                            if process_image_gt:
+                                cropped_image_gt = image_gt[slices]
+                                padded_image_gt = np.pad(cropped_image_gt,
+                                                         ((pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                                                         mode='constant')
+                                resized_image_gt = np.zeros(
+                                    (target_shape[0], target_shape[1], padded_image_gt.shape[2]),
+                                    dtype=padded_image_gt.dtype)
+                                for i in range(padded_image_gt.shape[2]):
+                                    resized_image_gt[1:target_shape[0]-1, 1:target_shape[1]-1, i] = (
+                                        cv2.resize(padded_image_gt[:, :, i],
+                                                   (target_shape[0] - 2, target_shape[1] - 2),
+                                                   interpolation=interpolation))
+                    else:
+                        resized_layers = []
+                        resized_layers_gt = []
+                        for i in range(image.shape[2]):
+                            layer = image[:, :, i]
+                            non_zero_indices = np.nonzero(layer)
+                            if len(non_zero_indices[0]) == 0:
+                                resized_layer = np.zeros(target_shape, dtype=layer.dtype)
+                                resized_layers.append(resized_layer)
+                                if process_image_gt:
+                                    resized_layer_gt = np.zeros(target_shape, dtype=layer.dtype)
+                                    resized_layers_gt.append(resized_layer_gt)
+                            else :
+                                min_height = np.min(non_zero_indices[0])
+                                max_height = np.max(non_zero_indices[0])
+                                min_width = np.min(non_zero_indices[1])
+                                max_width = np.max(non_zero_indices[1])
+                                cropped_layer = layer[min_height:max_height + 1, min_width:max_width + 1]
 
-                patient_data['image_interest_part_data'] = images_interest_part
-        return self.data_loader.data
+                                # Calculate padding to make the cropped layer square
+                                height, width = cropped_layer.shape
+                                max_dim = max(height, width)
+                                pad_height = (max_dim - height) // 2
+                                pad_width = (max_dim - width) // 2
 
-    def standardize_images_to_shape(self, target_shape: tuple[int, int]) -> dict:
-        """
-        Standardize images by resizing them to a target shape along the height and width dimensions.
-        :param target_shape: target shape to resize the images to
-        :return: the dictionary of data_loader.data with added 'image_resized_data' key.
-        """
-        for dataset_key, dataset in self.data_loader.data.items():
-            for patient, patient_data in tqdm(dataset.items(), desc=f"Resizing images in '{dataset_key}'"):
-                images_resized = {}
-                for image_name, image in patient_data['image_interest_part_data'].items():
-                    resized_image = np.zeros((target_shape[0], target_shape[1], image.shape[2]), dtype=image.dtype)
-                    for i in range(image.shape[2]):
-                        resized_image[:, :, i] = cv2.resize(image[:, :, i], target_shape, interpolation=cv2.INTER_CUBIC)
-                    images_resized[image_name] = resized_image
-                patient_data['image_resized_data'] = images_resized
+                                # Pad the cropped layer to a square shape
+                                padded_layer = np.pad(cropped_layer, ((pad_height, pad_height), (pad_width, pad_width)),
+                                                      mode='constant')
+
+                                # Resize the padded layer to the target shape
+                                interpolation_layer = cv2.INTER_CUBIC if target_shape[0] - 2 > padded_layer.shape[0] else cv2.INTER_AREA
+                                resized_layer = np.pad(
+                                    cv2.resize(padded_layer, (target_shape[0] - 2, target_shape[1] - 2),
+                                               interpolation=interpolation_layer),
+                                    ((1, 1), (1, 1)), mode='constant')
+
+                                resized_layers.append(resized_layer)
+
+                                # Process the _gt image if necessary
+                                if process_image_gt:
+                                    layer_gt = patient_data['image_data'][image_gt_name][:, :, i]
+                                    cropped_layer_gt = layer_gt[min_height:max_height + 1, min_width:max_width + 1]
+                                    padded_layer_gt = np.pad(cropped_layer_gt,
+                                                             ((pad_height, pad_height), (pad_width, pad_width)),
+                                                             mode='constant')
+                                    resized_layer_gt = np.pad(
+                                        cv2.resize(padded_layer_gt, (target_shape[0] - 2, target_shape[1] - 2),
+                                                   interpolation=interpolation_layer),
+                                        ((1, 1), (1, 1)), mode='constant')
+                                    resized_layers_gt.append(resized_layer_gt)
+
+                        resized_image = np.stack(resized_layers, axis=2)
+                        if process_image_gt:
+                            resized_image_gt = np.stack(resized_layers_gt, axis=2)
+
+                    images_transformed[image_name] = resized_image
+                    if process_image_gt:
+                        images_transformed[image_gt_name] = resized_image_gt
+
+                patient_data[output_key] = images_transformed
         return self.data_loader.data

@@ -1,5 +1,6 @@
 import ast
 
+import cv2
 import numpy as np
 
 from tests.utils import assert_dict_equal
@@ -98,25 +99,25 @@ def test_data_transformer_find_images_max_dim(data_transformer, data_transformer
     assert actual_outputs == expected_outputs
 
 
-# noinspection DuplicatedCode
-def test_data_transformer_crop_to_interest_part(data_transformer):
+#noinspection DuplicatedCode
+def test_data_transformer_crop_and_resize(data_transformer):
     data_to_load = {
         'test': {
             'patient101': {
                 'image_data': {
-                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (1, 1)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (1, 1)), mode='constant'),
-                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (2, 2)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (2, 2)), mode='constant')
+                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant')
                 },
                 'group': 'NOR'
             },
             'patient102': {
                 'image_data': {
-                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (1, 1)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (1, 1)), mode='constant'),
-                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (2, 2)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (2, 2)), mode='constant')
+                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant')
                 },
                 'group': 'MINF'
             }
@@ -124,41 +125,44 @@ def test_data_transformer_crop_to_interest_part(data_transformer):
     }
     data_transformer.data_loader.data = data_to_load
 
-    actual_output = data_transformer.crop_to_interest_part()
+    target_shape = (10, 10)
+    image_names = ['ED', 'ED_gt']
+    actual_output = data_transformer.crop_and_resize(target_shape, image_names, link_gt_to_data=True,
+                                                     keep_3d_consistency=True)
 
     expected_output = {
         'test': {
             'patient101': {
                 'image_data': {
-                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (1, 1)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (1, 1)), mode='constant'),
-                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (2, 2)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (2, 2)), mode='constant')
+                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant')
                 },
                 'group': 'NOR',
-                'image_interest_part_data': {
-                    'ED': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((5, 5, 3)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((1, 1), (1, 1), (0, 0)), mode='constant')
+                'image_transformed_data': {
+                    'ED': np.stack([np.pad(cv2.resize(np.ones((4, 4)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                                           ((1, 1), (1, 1)), mode='constant') for _ in range(2)], axis=2),
+                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((4, 4)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                                              ((1, 1), (1, 1)), mode='constant') for _ in range(2)], axis=2),
                 }
             },
             'patient102': {
                 'image_data': {
-                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (1, 1)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (1, 1)), mode='constant'),
-                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (2, 2)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (2, 2)), mode='constant')
+                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant')
                 },
                 'group': 'MINF',
-                'image_interest_part_data': {
-                    'ED': np.pad(np.ones((3, 3, 1)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((1, 1), (1, 1), (0, 0)), mode='constant')
+                'image_transformed_data': {
+                    'ED': np.stack([np.pad(cv2.resize(np.ones((3, 3)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                                           ((1, 1), (1, 1)), mode='constant') for _ in range(1)], axis=2),
+                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((3, 3)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                                              ((1, 1), (1, 1)), mode='constant') for _ in range(1)], axis=2),
                 }
             }
         }
     }
 
-    assert_dict_equal(actual_output, expected_output)
+    assert_dict_equal(actual_output, expected_output, print_diff=True)
