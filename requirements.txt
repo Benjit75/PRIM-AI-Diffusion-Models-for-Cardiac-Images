@@ -1,3 +1,4 @@
+einops
 matplotlib
 nibabel
 numpy
