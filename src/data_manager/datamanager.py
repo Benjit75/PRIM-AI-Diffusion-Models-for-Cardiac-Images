@@ -293,7 +293,8 @@ class DataDisplayer:
         fig, axs = plt.subplots(1, len(image_names))
         fig.set_size_inches(10, 10)
         for i, im_name in enumerate(image_names):
-            axs[i].imshow(data[id_example][image_type][im_name][:, :, 0], cmap='gray')
+            image = data[id_example][image_type][im_name]
+            axs[i].imshow(image[:, :, image.shape[2]//2], cmap='gray')
             axs[i].set_title(f"{im_name}")
         plt.show()
 
@@ -512,3 +513,26 @@ class DataTransformer:
 
                 patient_data[output_key] = images_transformed
         return self.data_loader.data
+
+    @staticmethod
+    def rotate_images(angle:float, images:list[np.ndarray]) -> list[np.ndarray]:
+        """
+        Rotate images by a given angle.
+        :param angle: Angle to rotate the images by.
+        :param images: List of 3D images to rotate.
+        :return: List of rotated images.
+        """
+        rotated_images = []
+        for image in images:
+            if image.ndim == 3:
+                shape = image.shape
+                M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
+                rotated_image = np.stack([cv2.warpAffine(image[:, :, i], M, (shape[1], shape[0])) for i in range(shape[2])], axis=2)
+            elif image.ndim == 2:
+                M = cv2.getRotationMatrix2D((image.shape[1] / 2, image.shape[0] / 2), angle, 1)
+                rotated_image = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+            else:
+                raise ValueError("Images must be 2D or 3D")
+            rotated_images.append(rotated_image)
+
+        return rotated_images
