@@ -370,6 +370,7 @@ class DataTransformer:
 
     def crop_and_resize(self,
                         target_shape: tuple[int, int]=(256, 256),
+                        padding: float=0.1,
                         image_names: Optional[list[str]]=None,
                         link_gt_to_data: bool=True,
                         keep_3d_consistency: bool=True,
@@ -429,13 +430,14 @@ class DataTransformer:
                                                   mode='constant')
 
                             # Resize the padded image to the target shape
-                            interpolation = cv2.INTER_CUBIC if target_shape[0] - 2 > padded_image.shape[0] else cv2.INTER_AREA
+                            pad = int(target_shape[0]*padding)
+                            interpolation = cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_image.shape[0] else cv2.INTER_AREA
                             resized_image = np.zeros((target_shape[0], target_shape[1], padded_image.shape[2]),
                                                     dtype=padded_image.dtype)
                             for i in range(padded_image.shape[2]):
-                                resized_image[1:target_shape[0]-1, 1:target_shape[1]-1, i] = (
+                                resized_image[pad:target_shape[0]-pad, pad:target_shape[1]-pad, i] = (
                                     cv2.resize(padded_image[:, :, i],
-                                               (target_shape[0] - 2, target_shape[1] - 2),
+                                               (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
                                                interpolation=interpolation))
 
                             # Process the _gt image if necessary
@@ -448,9 +450,9 @@ class DataTransformer:
                                     (target_shape[0], target_shape[1], padded_image_gt.shape[2]),
                                     dtype=padded_image_gt.dtype)
                                 for i in range(padded_image_gt.shape[2]):
-                                    resized_image_gt[1:target_shape[0]-1, 1:target_shape[1]-1, i] = (
+                                    resized_image_gt[pad:target_shape[0]-pad, pad:target_shape[1]-pad, i] = (
                                         cv2.resize(padded_image_gt[:, :, i],
-                                                   (target_shape[0] - 2, target_shape[1] - 2),
+                                                   (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
                                                    interpolation=interpolation))
                     else:
                         resized_layers = []
@@ -482,11 +484,12 @@ class DataTransformer:
                                                       mode='constant')
 
                                 # Resize the padded layer to the target shape
-                                interpolation_layer = cv2.INTER_CUBIC if target_shape[0] - 2 > padded_layer.shape[0] else cv2.INTER_AREA
+                                pad = int(target_shape[0]*padding)
+                                interpolation_layer = cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_layer.shape[0] else cv2.INTER_AREA
                                 resized_layer = np.pad(
-                                    cv2.resize(padded_layer, (target_shape[0] - 2, target_shape[1] - 2),
+                                    cv2.resize(padded_layer, (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
                                                interpolation=interpolation_layer),
-                                    ((1, 1), (1, 1)), mode='constant')
+                                    ((pad, pad), (pad, pad)), mode='constant')
 
                                 resized_layers.append(resized_layer)
 
@@ -498,9 +501,9 @@ class DataTransformer:
                                                              ((pad_height, pad_height), (pad_width, pad_width)),
                                                              mode='constant')
                                     resized_layer_gt = np.pad(
-                                        cv2.resize(padded_layer_gt, (target_shape[0] - 2, target_shape[1] - 2),
+                                        cv2.resize(padded_layer_gt, (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
                                                    interpolation=interpolation_layer),
-                                        ((1, 1), (1, 1)), mode='constant')
+                                        ((pad, pad), (pad, pad)), mode='constant')
                                     resized_layers_gt.append(resized_layer_gt)
 
                         resized_image = np.stack(resized_layers, axis=2)
