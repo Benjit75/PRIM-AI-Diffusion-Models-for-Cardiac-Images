@@ -539,9 +539,9 @@ class DataTransformer:
         :param channels: Number of channels to create.
         :return: Images with channels created from the ground truth image c x h x w x d.
         """
-        img_channel = np.zeros((channels, *image_gt.shape), dtype=float)
+        img_channel = np.zeros((channels, *image_gt.shape), dtype=np.float32)
         for i in range(channels):
-            img_channel[i] = (image_gt == i + 1).astype(float)
+            img_channel[i] = (image_gt == i + 1).astype(np.float32)
         return img_channel
 
     @staticmethod
