@@ -286,7 +286,7 @@ class DataDisplayer:
         Display images for a specific example.
         :param data_name: name of the data (ex: 'train', 'test')
         :param id_example: id of the example (ex: 'patient001', 'patient002', ...)
-        :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
+        :param image_type: types of the images to display (ex: 'image_data', 'image_resized_data')
         :param image_names: names of the images to extract (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
         """
         data = self.data_loader.data[data_name]
@@ -294,7 +294,13 @@ class DataDisplayer:
         fig.set_size_inches(10, 10)
         for i, im_name in enumerate(image_names):
             image = data[id_example][image_type][im_name]
-            axs[i].imshow(image[:, :, image.shape[2]//2], cmap='gray')
+            image = image[..., image.shape[-1]//2]
+            if image.ndim == 3: # channels image c x h x w
+                # transform to h x w x c
+                image = np.moveaxis(image, 0, -1)
+                axs[i].imshow(image)
+            else: # single channel image h x w
+                axs[i].imshow(image, cmap='gray')
             axs[i].set_title(f"{im_name}")
         plt.show()
 
@@ -374,14 +380,17 @@ class DataTransformer:
                         image_names: Optional[list[str]]=None,
                         link_gt_to_data: bool=True,
                         keep_3d_consistency: bool=True,
+                        create_channels_from_gt: bool=False,
                         output_key: str='image_transformed_data',
                         erase_previous_output: bool=True) -> dict:
         """
         Crop the images to the interesting part and resize them to a target shape.
         :param target_shape: Target shape to resize the images to.
+        :param padding: Padding to add to the images before resizing
         :param image_names: List of image names to transform (e.g., ['ED', 'ES', 'ED_gt', 'ES_gt']).
         :param link_gt_to_data: Whether to link the crop parameters of _gt images to their corresponding images.
         :param keep_3d_consistency: Whether to perform the same crop for all layers of 3D images.
+        :param create_channels_from_gt: Whether to create channels for the ground truth images.
         :param output_key: The key to store the transformed images in the data dictionary.
         :param erase_previous_output: Whether to erase the previous output if it exists.
         :return: The dictionary of data_loader.data with added output_key.
@@ -431,7 +440,7 @@ class DataTransformer:
 
                             # Resize the padded image to the target shape
                             pad = int(target_shape[0]*padding)
-                            interpolation = cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_image.shape[0] else cv2.INTER_AREA
+                            interpolation = cv2.INTER_NEAREST if '_gt' in image_name else cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_image.shape[0] else cv2.INTER_AREA
                             resized_image = np.zeros((target_shape[0], target_shape[1], padded_image.shape[2]),
                                                     dtype=padded_image.dtype)
                             for i in range(padded_image.shape[2]):
@@ -453,7 +462,7 @@ class DataTransformer:
                                     resized_image_gt[pad:target_shape[0]-pad, pad:target_shape[1]-pad, i] = (
                                         cv2.resize(padded_image_gt[:, :, i],
                                                    (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
-                                                   interpolation=interpolation))
+                                                   interpolation=cv2.INTER_NEAREST))
                     else:
                         resized_layers = []
                         resized_layers_gt = []
@@ -485,7 +494,7 @@ class DataTransformer:
 
                                 # Resize the padded layer to the target shape
                                 pad = int(target_shape[0]*padding)
-                                interpolation_layer = cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_layer.shape[0] else cv2.INTER_AREA
+                                interpolation_layer = cv2.INTER_NEAREST if '_gt' in image_name else cv2.INTER_CUBIC if target_shape[0] - 2*pad > padded_layer.shape[0] else cv2.INTER_AREA
                                 resized_layer = np.pad(
                                     cv2.resize(padded_layer, (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
                                                interpolation=interpolation_layer),
@@ -502,7 +511,7 @@ class DataTransformer:
                                                              mode='constant')
                                     resized_layer_gt = np.pad(
                                         cv2.resize(padded_layer_gt, (target_shape[0] - 2*pad, target_shape[1] - 2*pad),
-                                                   interpolation=interpolation_layer),
+                                                   interpolation=cv2.INTER_NEAREST),
                                         ((pad, pad), (pad, pad)), mode='constant')
                                     resized_layers_gt.append(resized_layer_gt)
 
@@ -510,32 +519,83 @@ class DataTransformer:
                         if process_image_gt:
                             resized_image_gt = np.stack(resized_layers_gt, axis=2)
 
+                    if '_gt' in image_name and create_channels_from_gt:
+                        resized_image = self.create_channels_from_gt(resized_image)
                     images_transformed[image_name] = resized_image
                     if process_image_gt:
-                        images_transformed[image_gt_name] = resized_image_gt
+                        if create_channels_from_gt:
+                            images_transformed[image_gt_name] = self.create_channels_from_gt(resized_image_gt)
+                        else:
+                            images_transformed[image_gt_name] = resized_image_gt
 
                 patient_data[output_key] = images_transformed
         return self.data_loader.data
 
     @staticmethod
-    def rotate_images(angle:float, images:list[np.ndarray]) -> list[np.ndarray]:
+    def create_channels_from_gt(image_gt: np.ndarray, channels: int=3) -> np.ndarray:
+        """
+        Create channels from 3D ground truth image.
+        :param image_gt: 3D ground truth image h x w x d.
+        :param channels: Number of channels to create.
+        :return: Images with channels created from the ground truth image c x h x w x d.
+        """
+        img_channel = np.zeros((channels, *image_gt.shape), dtype=float)
+        for i in range(channels):
+            img_channel[i] = (image_gt == i + 1).astype(float)
+        return img_channel
+
+    @staticmethod
+    def rotate_images(angle: float, images: list[np.ndarray], has_channels:bool=False) -> list[np.ndarray]:
         """
         Rotate images by a given angle.
         :param angle: Angle to rotate the images by.
         :param images: List of 3D images to rotate.
+        :param has_channels: Whether the images have channels.
         :return: List of rotated images.
         """
         rotated_images = []
         for image in images:
-            if image.ndim == 3:
-                shape = image.shape
-                M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
-                rotated_image = np.stack([cv2.warpAffine(image[:, :, i], M, (shape[1], shape[0])) for i in range(shape[2])], axis=2)
-            elif image.ndim == 2:
-                M = cv2.getRotationMatrix2D((image.shape[1] / 2, image.shape[0] / 2), angle, 1)
-                rotated_image = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+            if not has_channels:
+                if image.ndim == 3:
+                    shape = image.shape
+                    M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
+                    rotated_image = np.stack([cv2.warpAffine(image[:, :, i], M, (shape[1], shape[0])) for i in range(shape[2])], axis=2)
+                elif image.ndim == 2:
+                    M = cv2.getRotationMatrix2D((image.shape[1] / 2, image.shape[0] / 2), angle, 1)
+                    rotated_image = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+                else:
+                    raise ValueError("Images must be 2D or 3D: h x w (x d)")
+                rotated_images.append(rotated_image)
             else:
-                raise ValueError("Images must be 2D or 3D")
-            rotated_images.append(rotated_image)
+                # case of images with channels c x h x w (x d)
+                if image.ndim == 4:
+                    shape = image.shape
+                    M = cv2.getRotationMatrix2D((shape[2] / 2, shape[1] / 2), angle, 1) # rotation around the center
+                    rotated_image = np.stack([np.stack([cv2.warpAffine(image[c, :, :, i], M, (shape[2], shape[1])) for i in range(shape[-1])], axis=-1) for c in range(shape[0])], axis=0)
+                elif image.ndim == 3:
+                    shape = image.shape
+                    M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
+                    rotated_image = np.stack([cv2.warpAffine(image[c, :, :], M, (shape[1], shape[0])) for c in range(shape[0])], axis=0)
+                else:
+                    raise ValueError("Images must be 3D or 4D: c x h x w (x d)")
+                rotated_images.append(rotated_image)
 
         return rotated_images
+
+    @staticmethod
+    def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True) -> list[np.ndarray]:
+        """
+        Slice depth of images.
+        :param images: List of 3D images to slice (c x) h x w x d.
+        :param create_channel_dim: Whether to create a channel dimension (if not already present).
+        :return: List of sliced images (c x) h x w.
+        """
+        sliced_images = []
+        for image in tqdm(images, desc='Slicing images'):
+            shape = image.shape
+            for depth in range(shape[-1]):
+                slice = image[..., depth]
+                if slice.ndim == 2 and create_channel_dim:
+                    slice = np.expand_dims(slice, axis=0)
+                sliced_images.append(slice)
+        return sliced_images

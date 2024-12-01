@@ -105,19 +105,19 @@ def test_data_transformer_crop_and_resize(data_transformer):
         'test': {
             'patient101': {
                 'image_data': {
-                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant')
+                    'ED': np.pad(np.ones((4, 4, 2), dtype=float), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((4, 4, 2), dtype=float), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((5, 5, 3), dtype=float), ((5, 5), (3, 3), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((5, 5, 3), dtype=float), ((5, 5), (3, 3), (0, 0)), mode='constant')
                 },
                 'group': 'NOR'
             },
             'patient102': {
                 'image_data': {
-                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant')
+                    'ED': np.pad(np.ones((3, 3, 1), dtype=float), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((3, 3, 1), dtype=float), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((4, 4, 2), dtype=float), ((4, 4), (4, 4), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((4, 4, 2), dtype=float), ((4, 4), (4, 4), (0, 0)), mode='constant')
                 },
                 'group': 'MINF'
             }
@@ -127,38 +127,38 @@ def test_data_transformer_crop_and_resize(data_transformer):
 
     target_shape = (10, 10)
     image_names = ['ED', 'ED_gt']
-    actual_output = data_transformer.crop_and_resize(target_shape, image_names, link_gt_to_data=True,
-                                                     keep_3d_consistency=True)
+    actual_output = data_transformer.crop_and_resize(target_shape, image_names=image_names, link_gt_to_data=True,
+                                                     keep_3d_consistency=True, create_channels_from_gt=False)
 
     expected_output = {
         'test': {
             'patient101': {
                 'image_data': {
-                    'ED': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((4, 4, 2)), ((3, 3), (4, 4), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((5, 5, 3)), ((5, 5), (3, 3), (0, 0)), mode='constant')
+                    'ED': np.pad(np.ones((4, 4, 2), dtype=float), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((4, 4, 2), dtype=float), ((3, 3), (4, 4), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((5, 5, 3), dtype=float), ((5, 5), (3, 3), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((5, 5, 3), dtype=float), ((5, 5), (3, 3), (0, 0)), mode='constant')
                 },
                 'group': 'NOR',
                 'image_transformed_data': {
-                    'ED': np.stack([np.pad(cv2.resize(np.ones((4, 4)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                    'ED': np.stack([np.pad(cv2.resize(np.ones((4, 4), dtype=float), (8, 8), interpolation=cv2.INTER_CUBIC),
                                            ((1, 1), (1, 1)), mode='constant') for _ in range(2)], axis=2),
-                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((4, 4)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((4, 4)), (8, 8), interpolation=cv2.INTER_NEAREST),
                                               ((1, 1), (1, 1)), mode='constant') for _ in range(2)], axis=2),
                 }
             },
             'patient102': {
                 'image_data': {
-                    'ED': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
-                    'ED_gt': np.pad(np.ones((3, 3, 1)), ((3, 3), (3, 3), (0, 0)), mode='constant'),
-                    'ES': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant'),
-                    'ES_gt': np.pad(np.ones((4, 4, 2)), ((4, 4), (4, 4), (0, 0)), mode='constant')
+                    'ED': np.pad(np.ones((3, 3, 1), dtype=float), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ED_gt': np.pad(np.ones((3, 3, 1), dtype=float), ((3, 3), (3, 3), (0, 0)), mode='constant'),
+                    'ES': np.pad(np.ones((4, 4, 2), dtype=float), ((4, 4), (4, 4), (0, 0)), mode='constant'),
+                    'ES_gt': np.pad(np.ones((4, 4, 2), dtype=float), ((4, 4), (4, 4), (0, 0)), mode='constant')
                 },
                 'group': 'MINF',
                 'image_transformed_data': {
-                    'ED': np.stack([np.pad(cv2.resize(np.ones((3, 3)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                    'ED': np.stack([np.pad(cv2.resize(np.ones((3, 3), dtype=float), (8, 8), interpolation=cv2.INTER_CUBIC),
                                            ((1, 1), (1, 1)), mode='constant') for _ in range(1)], axis=2),
-                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((3, 3)), (8, 8), interpolation=cv2.INTER_LINEAR),
+                    'ED_gt': np.stack([np.pad(cv2.resize(np.ones((3, 3), dtype=float), (8, 8), interpolation=cv2.INTER_NEAREST),
                                               ((1, 1), (1, 1)), mode='constant') for _ in range(1)], axis=2),
                 }
             }
@@ -166,3 +166,61 @@ def test_data_transformer_crop_and_resize(data_transformer):
     }
 
     assert_dict_equal(actual_output, expected_output, print_diff=True)
+
+
+def test_data_transformer_create_channels_from_gt(data_transformer):
+    img_gt = np.array([
+        [
+            [0., 1., 2., 3.],
+            [1., 3., 0., 0.],
+            [2., 0., 0., 1.]
+        ],
+        [
+            [0., 0., 1., 2.],
+            [0., 0., 0., 0.],
+            [1., 2., 0., 3.]
+        ]
+    ])
+
+    actual_output = data_transformer.create_channels_from_gt(img_gt)
+
+    expected_output = np.array([
+        [
+            [
+                [0., 1., 0., 0.],
+                [1., 0., 0., 0.],
+                [0., 0., 0., 1.]
+            ],
+            [
+                [0., 0., 1., 0.],
+                [0., 0., 0., 0.],
+                [1., 0., 0., 0.]
+            ]
+        ],
+        [
+            [
+                [0., 0., 1., 0.],
+                [0., 0., 0., 0.],
+                [1., 0., 0., 0.]
+            ],
+            [
+                [0., 0., 0., 1.],
+                [0., 0., 0., 0.],
+                [0., 1., 0., 0.]
+            ]
+        ],
+        [
+            [
+                [0., 0., 0., 1.],
+                [0., 1., 0., 0.],
+                [0., 0., 0., 0.]
+            ],
+            [
+                [0., 0., 0., 0.],
+                [0., 0., 0., 0.],
+                [0., 0., 0., 1.]
+            ]
+        ]
+    ])
+
+    assert np.array_equal(actual_output, expected_output)
