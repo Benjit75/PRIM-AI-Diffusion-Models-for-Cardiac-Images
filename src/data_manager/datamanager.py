@@ -298,7 +298,8 @@ class DataDisplayer:
             if image.ndim == 3: # channels image c x h x w
                 # transform to h x w x c
                 image = np.moveaxis(image, 0, -1)
-                axs[i].imshow(image)
+                one_hot_image = self.one_hot_encode(image)
+                axs[i].imshow(image[:, :, 1:image.shape[2]])
             else: # single channel image h x w
                 axs[i].imshow(image, cmap='gray')
             axs[i].set_title(f"{im_name}")
@@ -335,6 +336,20 @@ class DataDisplayer:
         output.append(start_prefix + data_name)
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
         return "\n".join(output)
+
+    @staticmethod
+    def one_hot_encode(image: np.ndarray) -> np.ndarray:
+        """
+        One-hot encode the image, that is set to 1 the argmax of channels and others to 0.
+        :param image: image to one-hot-encode, shape h x w x c
+        :return: The corresponding one-hot image
+        """
+        h, w, c = image.shape
+        one_hot_image = np.zeros_like(image)
+        max_indices = np.argmax(image, axis=2)
+        rows, cols = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+        one_hot_image[rows, cols, max_indices] = 1
+        return one_hot_image
 
 
 class DataTransformer:
@@ -532,7 +547,7 @@ class DataTransformer:
         return self.data_loader.data
 
     @staticmethod
-    def create_channels_from_gt(image_gt: np.ndarray, channels: int=3) -> np.ndarray:
+    def create_channels_from_gt(image_gt: np.ndarray, channels: int=4) -> np.ndarray:
         """
         Create channels from 3D ground truth image.
         :param image_gt: 3D ground truth image h x w x d.
@@ -541,7 +556,7 @@ class DataTransformer:
         """
         img_channel = np.zeros((channels, *image_gt.shape), dtype=np.float32)
         for i in range(channels):
-            img_channel[i] = (image_gt == i + 1).astype(np.float32)
+            img_channel[i] = (image_gt == i).astype(np.float32)
         return img_channel
 
     @staticmethod
