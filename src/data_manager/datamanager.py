@@ -96,10 +96,8 @@ class DataLoader:
                         f"{id_subject}/{id_subject}_frame{metadata[image_type]:02}{image_suffix}.nii.gz"
                     )
                     extracted_image_path = self.extract_gz(image_path)
-                    if image_suffix == '_gt':
-                        image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata().astype(np.uint8)
-                    else:
-                        image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata()
+                    image_data[f"{image_type}{image_suffix}"] = nib.load(extracted_image_path).get_fdata().astype(np.float32)
+
             data[id_subject] = {"image_data": {k: v for k, v in image_data.items()},
                                 "height": metadata["Height"], "weight": metadata["Weight"],
                                 "group": metadata["Group"],
