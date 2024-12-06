@@ -339,16 +339,23 @@ class DataDisplayer:
     def one_hot_encode(image: np.ndarray) -> np.ndarray:
         """
         One-hot encode the image, that is set to 1 the argmax of channels and others to 0.
-        :param image: image to one-hot-encode, shape h x w x c
+        :param image: image to one-hot-encode, shape h x w (x d) x c
         :return: The corresponding one-hot image
         """
-        h, w, c = image.shape
         one_hot_image = np.zeros_like(image)
-        max_indices = np.argmax(image, axis=2)
-        rows, cols = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-        one_hot_image[rows, cols, max_indices] = 1
+        max_indices = np.argmax(image, axis=-1)
+        if len(image.shape) == 3:
+            h, w, c = image.shape
+            rows, cols,  = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+            one_hot_image[rows, cols, max_indices] = 1.
+        elif len(mage.shape) == 4:
+            h, w, d, c = image.shape
+            rows, cols, depths = np.meshgrid(np.arange(h), np.arange(w), np.arange(d), indexing='ij')
+            one_hot_image[rows, cols, depths, max_indices] = 1.  # Set the max index to 1 in the one-hot array
+        else:
+            raise ValueError("Images must be 3D or 4D: h x w (x d) x c")
         return one_hot_image
-
+        
 
 class DataTransformer:
     """
@@ -558,43 +565,64 @@ class DataTransformer:
         return img_channel
 
     @staticmethod
-    def rotate_images(angle: float, images: list[np.ndarray], has_channels:bool=False) -> list[np.ndarray]:
+    def rotate_images(angle: float, images: list[np.ndarray], has_channels: bool = False, epsilon: float = 1e-3) -> list[np.ndarray]:
         """
-        Rotate images by a given angle.
-        :param angle: Angle to rotate the images by.
-        :param images: List of 3D images to rotate.
+        Rotate images by a given angle. For images with channels, fills 0-pixels caused by rotation 
+        with 1 in the background channel (first channel).
+        
+        :param angle: Angle to rotate the images by (in degrees).
+        :param images: List of 2D, 3D, or 4D images to rotate.
         :param has_channels: Whether the images have channels.
+        :param epsilon: 0 used for float comparison
         :return: List of rotated images.
         """
         rotated_images = []
         for image in images:
             if not has_channels:
-                if image.ndim == 3:
+                if image.shape[0] == 3:  # 3D image (h x w x d)
                     shape = image.shape
                     M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
-                    rotated_image = np.stack([cv2.warpAffine(image[:, :, i], M, (shape[1], shape[0])) for i in range(shape[2])], axis=2)
-                elif image.ndim == 2:
+                    rotated_image = np.stack(
+                        [cv2.warpAffine(image[:, :, i], M, (shape[1], shape[0])) for i in range(shape[2])],
+                        axis=2,
+                    )
+                elif image.shape[0] == 2:  # 2D image (h x w)
                     M = cv2.getRotationMatrix2D((image.shape[1] / 2, image.shape[0] / 2), angle, 1)
                     rotated_image = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
                 else:
                     raise ValueError("Images must be 2D or 3D: h x w (x d)")
                 rotated_images.append(rotated_image)
             else:
-                # case of images with channels c x h x w (x d)
-                if image.ndim == 4:
+                # Case of images with channels c x h x w (x d)
+                if image.shape[0] == 4:  # 4D image (c x h x w x d)
                     shape = image.shape
-                    M = cv2.getRotationMatrix2D((shape[2] / 2, shape[1] / 2), angle, 1) # rotation around the center
-                    rotated_image = np.stack([np.stack([cv2.warpAffine(image[c, :, :, i], M, (shape[2], shape[1])) for i in range(shape[-1])], axis=-1) for c in range(shape[0])], axis=0)
-                elif image.ndim == 3:
+                    M = cv2.getRotationMatrix2D((shape[2] / 2, shape[1] / 2), angle, 1)  # Rotate around the center
+                    rotated_image = np.stack(
+                        [
+                            np.stack(
+                                [cv2.warpAffine(image[c, :, :, i], M, (shape[2], shape[1])) for i in range(shape[-1])],
+                                axis=-1,
+                            )
+                            for c in range(shape[0])
+                        ],
+                        axis=0,
+                    )
+                elif image.shape[0] == 3:  # 3D image (c x h x w)
                     shape = image.shape
-                    M = cv2.getRotationMatrix2D((shape[1] / 2, shape[0] / 2), angle, 1)
-                    rotated_image = np.stack([cv2.warpAffine(image[c, :, :], M, (shape[1], shape[0])) for c in range(shape[0])], axis=0)
+                    M = cv2.getRotationMatrix2D((shape[2] / 2, shape[1] / 2), angle, 1)
+                    rotated_image = np.stack(
+                        [cv2.warpAffine(image[c, :, :], M, (shape[2], shape[1])) for c in range(shape[0])],
+                        axis=0,
+                    )
                 else:
                     raise ValueError("Images must be 3D or 4D: c x h x w (x d)")
+                # Handle zero-fill pixels generated by rotation
+                zeros_mask = np.all(rotated_image < epsilon, axis=0)  # Check along all channels
+                rotated_image[0, zeros_mask] = 1.  # Set the background channel to 1 where mask is True
                 rotated_images.append(rotated_image)
-
+    
         return rotated_images
-
+        
     @staticmethod
     def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True) -> list[np.ndarray]:
         """
@@ -612,3 +640,12 @@ class DataTransformer:
                     slice = np.expand_dims(slice, axis=0)
                 sliced_images.append(slice)
         return sliced_images
+
+    @staticmethod
+    def one_hot_encode_batch(images : list[np.ndarray]) -> list[np.ndarray]:
+        """
+        One-hot-encode a list of images
+        :param images: the list of images to one-hot-encode, shape c x h x w
+        :return: List of one-hot-encoded images
+        """
+        return [DataDisplayer.one_hot_encode(img.transpose(1, 2, 0)).transpose(2, 0, 1) for img in images]
