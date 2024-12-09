@@ -293,7 +293,7 @@ class DataDisplayer:
         for i, im_name in enumerate(image_names):
             image = data[id_example][image_type][im_name]
             image = image[..., image.shape[-1]//2]
-            if image.ndim == 3: # channels image c x h x w
+            if len(image.shape) == 3: # channels image c x h x w
                 # transform to h x w x c
                 image = np.moveaxis(image, 0, -1)
                 one_hot_image = self.one_hot_encode(image)
@@ -561,7 +561,7 @@ class DataTransformer:
         """
         img_channel = np.zeros((channels, *image_gt.shape), dtype=np.float32)
         for i in range(channels):
-            img_channel[i] = (image_gt == i).astype(np.float32)
+            img_channel[i] = (np.round(image_gt) == i).astype(np.float32)
         return img_channel
 
     @staticmethod
