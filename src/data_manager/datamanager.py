@@ -68,7 +68,7 @@ class DataLoader:
                             metadata[key] = value
         return metadata
 
-    def load_data(self, sub_path: str, name: Optional[str] = None, store: Optional[bool] = False) -> dict:
+    def load_data(self, sub_path: str, name: Optional[str] = None, store: Optional[bool] = False, verbose: bool=True) -> dict:
         """
         Load data from a subpath and optionally store it.
 
@@ -84,7 +84,7 @@ class DataLoader:
         ids = [d for d in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, d))]
         data = {}
 
-        for id_subject in tqdm(ids, desc=f"Loading data in '{folder_path}'"):
+        for id_subject in tqdm(ids, disable=not verbose, desc=f"Loading data in '{folder_path}'"):
             metadata_path = os.path.join(folder_path, f"{id_subject}/Info.cfg")
             metadata = self.read_metadata(metadata_path)
 
@@ -137,19 +137,21 @@ class DataLoader:
                                 data_names: Optional[list[str]] = None,
                                 group_names: Optional[list[str]] = None,
                                 image_types: Optional[list[str]] = None,
-                                image_names: Optional[list[str]] = None) -> list[np.ndarray]:
+                                image_names: Optional[list[str]] = None,
+                                verbose: bool=True) -> list[np.ndarray]:
         """
         Extract images from the data, filtered by image names and group names.
         :param data_names: names of the data to extract, or None to extract all (ex: 'train', 'test')
         :param group_names: names of the groups to extract, or None to extract all (ex: 'NOR', 'MINF', 'DCM', 'HCM', 'RV')
         :param image_types: types of the images to extract, or None to extract all (ex: 'image_data', 'image_interest_part_data')
         :param image_names: names of the images to extract, or None to extract all (ex: 'ED', 'ES', 'ED_gt', 'ES_gt')
+        :param verbose: whether to display the progress bar
         :return: A numpy array containing the extracted images, in a flattened list.
         """
         images = []
         for dataset_key, dataset in self.data.items():  # Iterate over the datasets
             if data_names is None or dataset_key in data_names:  # Check if the dataset should be extracted
-                for patient, patient_data in tqdm(dataset.items(),
+                for patient, patient_data in tqdm(dataset.items(), disable=not verbose,
                                                   desc=f"Extracting images in '{dataset_key}'"):  # Iterate over the patients
                     if group_names is None or patient_data['group'] in group_names:  # Check if the patient is in a group to extract
                         for image_type, image_data in patient_data.items():  # Iterate over the image types
@@ -335,27 +337,6 @@ class DataDisplayer:
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
         return "\n".join(output)
 
-    @staticmethod
-    def one_hot_encode(image: np.ndarray) -> np.ndarray:
-        """
-        One-hot encode the image, that is set to 1 the argmax of channels and others to 0.
-        :param image: image to one-hot-encode, shape h x w (x d) x c
-        :return: The corresponding one-hot image
-        """
-        one_hot_image = np.zeros_like(image)
-        max_indices = np.argmax(image, axis=-1)
-        if len(image.shape) == 3:
-            h, w, c = image.shape
-            rows, cols,  = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-            one_hot_image[rows, cols, max_indices] = 1.
-        elif len(mage.shape) == 4:
-            h, w, d, c = image.shape
-            rows, cols, depths = np.meshgrid(np.arange(h), np.arange(w), np.arange(d), indexing='ij')
-            one_hot_image[rows, cols, depths, max_indices] = 1.  # Set the max index to 1 in the one-hot array
-        else:
-            raise ValueError("Images must be 3D or 4D: h x w (x d) x c")
-        return one_hot_image
-        
 
 class DataTransformer:
     """
@@ -402,7 +383,8 @@ class DataTransformer:
                         keep_3d_consistency: bool=True,
                         create_channels_from_gt: bool=False,
                         output_key: str='image_transformed_data',
-                        erase_previous_output: bool=True) -> dict:
+                        erase_previous_output: bool=True,
+                        verbose: bool=True) -> dict:
         """
         Crop the images to the interesting part and resize them to a target shape.
         :param target_shape: Target shape to resize the images to.
@@ -413,12 +395,13 @@ class DataTransformer:
         :param create_channels_from_gt: Whether to create channels for the ground truth images.
         :param output_key: The key to store the transformed images in the data dictionary.
         :param erase_previous_output: Whether to erase the previous output if it exists.
+        :param verbose: Whether to display the progress bar.
         :return: The dictionary of data_loader.data with added output_key.
         """
         if image_names is None:
             image_names = ['ED', 'ES', 'ED_gt', 'ES_gt']
         for dataset_key, dataset in self.data_loader.data.items():
-            for patient, patient_data in tqdm(dataset.items(), desc=f"Transforming images in '{dataset_key}'"):
+            for patient, patient_data in tqdm(dataset.items(), disable=not verbose, desc=f"Transforming images in '{dataset_key}'"):
                 if erase_previous_output or output_key not in patient_data:
                     images_transformed = {}
                 else:
@@ -624,15 +607,16 @@ class DataTransformer:
         return rotated_images
         
     @staticmethod
-    def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True) -> list[np.ndarray]:
+    def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True, verbose: bool=True) -> list[np.ndarray]:
         """
         Slice depth of images.
         :param images: List of 3D images to slice (c x) h x w x d.
         :param create_channel_dim: Whether to create a channel dimension (if not already present).
+        :param verbose: Whether to display the progress bar.
         :return: List of sliced images (c x) h x w.
         """
         sliced_images = []
-        for image in tqdm(images, desc='Slicing images'):
+        for image in tqdm(images, disable=not verbose, desc='Slicing images'):
             shape = image.shape
             for depth in range(shape[-1]):
                 slice = image[..., depth]
@@ -642,10 +626,31 @@ class DataTransformer:
         return sliced_images
 
     @staticmethod
+    def one_hot_encode(image: np.ndarray) -> np.ndarray:
+        """
+        One-hot encode the image, that is set to 1 the argmax of channels and others to 0.
+        :param image: image to one-hot-encode, shape h x w (x d) x c
+        :return: The corresponding one-hot image
+        """
+        one_hot_image = np.zeros_like(image)
+        max_indices = np.argmax(image, axis=-1)
+        if len(image.shape) == 3:
+            h, w, c = image.shape
+            rows, cols, = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+            one_hot_image[rows, cols, max_indices] = 1.
+        elif len(image.shape) == 4:
+            h, w, d, c = image.shape
+            rows, cols, depths = np.meshgrid(np.arange(h), np.arange(w), np.arange(d), indexing='ij')
+            one_hot_image[rows, cols, depths, max_indices] = 1.  # Set the max index to 1 in the one-hot array
+        else:
+            raise ValueError("Images must be 3D or 4D: h x w (x d) x c")
+        return one_hot_image
+
+    @staticmethod
     def one_hot_encode_batch(images : list[np.ndarray]) -> list[np.ndarray]:
         """
         One-hot-encode a list of images
         :param images: the list of images to one-hot-encode, shape c x h x w
         :return: List of one-hot-encoded images
         """
-        return [DataDisplayer.one_hot_encode(img.transpose(1, 2, 0)).transpose(2, 0, 1) for img in images]
+        return [DataTransformer.one_hot_encode(img.transpose(1, 2, 0)).transpose(2, 0, 1) for img in images]

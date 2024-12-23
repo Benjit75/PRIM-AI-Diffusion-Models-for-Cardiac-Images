@@ -1,10 +1,25 @@
-einops
-matplotlib
-nibabel
+# Data manipulation and analysis
 numpy
-opencv-python
 pandas
-pytest
+
+# Image processing
+opencv-python
+pillow
+
+# Scientific computing and visualization
+matplotlib
 scikit-learn
+einops
+nibabel
+
+# Deep learning
 torch
+torchvision
+
+# Utilities
 tqdm
+psutil
+ipython
+
+# Testing
+pytest
