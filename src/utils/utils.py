@@ -1,7 +1,22 @@
 import datetime
+from enum import Enum
 import itertools
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+class VerboseLevel(Enum):
+    NONE = 0
+    TQDM = 1
+    PRINT = 2
+    DISPLAY = 3
+
+    def __str__(self):
+        return self.name
+
+    def __lt__(self, other):
+        return self.value < other.value
+
 
 def format_duration(duration):
     td = datetime.timedelta(seconds=duration)

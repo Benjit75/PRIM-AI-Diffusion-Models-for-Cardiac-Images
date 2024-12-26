@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm.notebook import tqdm
 
+from src.utils.utils import VerboseLevel
+
 
 class DataLoader:
     def __init__(self, root_folder: str):
@@ -68,7 +70,8 @@ class DataLoader:
                             metadata[key] = value
         return metadata
 
-    def load_data(self, sub_path: str, name: Optional[str] = None, store: Optional[bool] = False, verbose: bool=True) -> dict:
+    def load_data(self, sub_path: str, name: Optional[str] = None, store: Optional[bool] = False,
+                  verbose: VerboseLevel=VerboseLevel.TQDM) -> dict:
         """
         Load data from a subpath and optionally store it.
 
@@ -76,6 +79,7 @@ class DataLoader:
         sub_path (str): The subpath to load data from.
         name (str, optional): The name to store the data under. Defaults to None.
         store (bool, optional): Whether to store the data. Defaults to False.
+        verbose (VerboseLevel, optional): The verbosity level. Defaults to VerboseLevel.TQDM.
 
         Returns:
         dict: A dictionary containing the loaded data.
@@ -84,7 +88,7 @@ class DataLoader:
         ids = [d for d in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, d))]
         data = {}
 
-        for id_subject in tqdm(ids, disable=not verbose, desc=f"Loading data in '{folder_path}'"):
+        for id_subject in tqdm(ids, disable=verbose < VerboseLevel.TQDM, desc=f"Loading data in '{folder_path}'"):
             metadata_path = os.path.join(folder_path, f"{id_subject}/Info.cfg")
             metadata = self.read_metadata(metadata_path)
 
@@ -138,7 +142,7 @@ class DataLoader:
                                 group_names: Optional[list[str]] = None,
                                 image_types: Optional[list[str]] = None,
                                 image_names: Optional[list[str]] = None,
-                                verbose: bool=True) -> list[np.ndarray]:
+                                verbose: VerboseLevel=VerboseLevel.TQDM) -> list[np.ndarray]:
         """
         Extract images from the data, filtered by image names and group names.
         :param data_names: names of the data to extract, or None to extract all (ex: 'train', 'test')
@@ -151,7 +155,7 @@ class DataLoader:
         images = []
         for dataset_key, dataset in self.data.items():  # Iterate over the datasets
             if data_names is None or dataset_key in data_names:  # Check if the dataset should be extracted
-                for patient, patient_data in tqdm(dataset.items(), disable=not verbose,
+                for patient, patient_data in tqdm(dataset.items(), disable=verbose < VerboseLevel.TQDM,
                                                   desc=f"Extracting images in '{dataset_key}'"):  # Iterate over the patients
                     if group_names is None or patient_data['group'] in group_names:  # Check if the patient is in a group to extract
                         for image_type, image_data in patient_data.items():  # Iterate over the image types
@@ -212,7 +216,8 @@ class DataDisplayer:
                          groups: Optional[list[str]]=None, image_names: Optional[list[str]]=None,
                          ids: Optional[list[str]]=None, sort_by: Optional[tuple[str]]=None,
                          nb_examples: Optional[int]=None, per_combination: bool=False,
-                         format_sep: Optional[tuple[str]] = None, format_categories: Optional[tuple[str]] = None) -> None:
+                         format_sep: Optional[tuple[str]] = None,
+                         format_categories: Optional[tuple[str]] = None) -> None:
         """
         Display examples based on the provided parameters.
         :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
@@ -298,7 +303,7 @@ class DataDisplayer:
             if len(image.shape) == 3: # channels image c x h x w
                 # transform to h x w x c
                 image = np.moveaxis(image, 0, -1)
-                one_hot_image = self.one_hot_encode(image)
+                one_hot_image = DataTransformer.one_hot_encode(image)
                 axs[i].imshow(image[:, :, 1:image.shape[2]])
             else: # single channel image h x w
                 axs[i].imshow(image, cmap='gray')
@@ -384,7 +389,7 @@ class DataTransformer:
                         create_channels_from_gt: bool=False,
                         output_key: str='image_transformed_data',
                         erase_previous_output: bool=True,
-                        verbose: bool=True) -> dict:
+                        verbose: VerboseLevel=VerboseLevel.TQDM) -> dict:
         """
         Crop the images to the interesting part and resize them to a target shape.
         :param target_shape: Target shape to resize the images to.
@@ -401,7 +406,8 @@ class DataTransformer:
         if image_names is None:
             image_names = ['ED', 'ES', 'ED_gt', 'ES_gt']
         for dataset_key, dataset in self.data_loader.data.items():
-            for patient, patient_data in tqdm(dataset.items(), disable=not verbose, desc=f"Transforming images in '{dataset_key}'"):
+            for patient, patient_data in tqdm(dataset.items(), disable=verbose < VerboseLevel.TQDM,
+                                              desc=f"Transforming images in '{dataset_key}'"):
                 if erase_previous_output or output_key not in patient_data:
                     images_transformed = {}
                 else:
@@ -607,7 +613,8 @@ class DataTransformer:
         return rotated_images
         
     @staticmethod
-    def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True, verbose: bool=True) -> list[np.ndarray]:
+    def slice_depth_images(images: list[np.ndarray], create_channel_dim: bool=True,
+                           verbose: VerboseLevel=VerboseLevel.TQDM) -> list[np.ndarray]:
         """
         Slice depth of images.
         :param images: List of 3D images to slice (c x) h x w x d.
@@ -616,7 +623,7 @@ class DataTransformer:
         :return: List of sliced images (c x) h x w.
         """
         sliced_images = []
-        for image in tqdm(images, disable=not verbose, desc='Slicing images'):
+        for image in tqdm(images, disable=verbose < VerboseLevel.TQDM, desc='Slicing images'):
             shape = image.shape
             for depth in range(shape[-1]):
                 slice = image[..., depth]
@@ -647,10 +654,15 @@ class DataTransformer:
         return one_hot_image
 
     @staticmethod
-    def one_hot_encode_batch(images : list[np.ndarray]) -> list[np.ndarray]:
+    def one_hot_encode_batch(images : list[np.ndarray], verbose: VerboseLevel=VerboseLevel.TQDM) -> list[np.ndarray]:
         """
         One-hot-encode a list of images
         :param images: the list of images to one-hot-encode, shape c x h x w
+        :param verbose: whether to display the progress bar
         :return: List of one-hot-encoded images
         """
-        return [DataTransformer.one_hot_encode(img.transpose(1, 2, 0)).transpose(2, 0, 1) for img in images]
+        one_hot_images = []
+        for image in tqdm(images, disable=verbose < VerboseLevel.TQDM, desc='One-hot-encoding images'):
+            one_hot_images.append(DataTransformer.one_hot_encode(image.transpose(1, 2, 0)).transpose(2, 0, 1))
+
+        return one_hot_images
