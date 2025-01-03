@@ -1,13 +1,18 @@
-from locale import normalize
+import warnings
+from typing import Tuple, Union, Callable, Optional
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+import torch
+from torch import nn, Tensor
+import torch.nn.functional as F
+from torch.utils.data import DataLoader as TorchDataLoader, random_split, Subset
 from tqdm.notebook import tqdm
 
-from sklearn.preprocessing import MinMaxScaler
-from torch import nn
-
 from src.data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
-from src.utils.utils import VerboseLevel
+from src.utils.utils import VerboseLevel, min_max_scaling
 
 
 class ModelPreprocessor:
@@ -200,13 +205,346 @@ class ModelPreprocessor:
         return one_hot_encoded_images
 
 
-class ModelTrainer:
-    """ Class to train the models """
+class Diffusion(nn.Module):
+    """ Class to define the diffusion algorithm """
 
-    def __init__(self, data_set: list[np.ndarray], batch_size: int,
-                 model: nn.Module, loss_fn: nn.Module, optimizer: nn.Module):
-        self.data_set = data_set
+    @staticmethod
+    def linear_beta_schedule(timesteps: int, beta_start: float=0.0001, beta_end: float=0.02) -> Tensor:
+        """
+        Linear beta schedule
+        :param timesteps: Number of timesteps
+        :param beta_start: Initial beta value
+        :param beta_end: Final beta value
+        :return: Beta values for each timestep
+        """
+        return torch.linspace(beta_start, beta_end, timesteps)
+
+    @staticmethod
+    def cosine_beta_schedule(timesteps: int, s: float=0.008) -> Tensor:
+        """
+        Cosine beta schedule
+        :param timesteps: Number of timesteps
+        :param s: Scaling factor
+        :return: Beta values for each timestep
+        """
+        steps = timesteps + 1
+        x = torch.linspace(0, timesteps, steps)
+        alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        return torch.clip(betas, 0.0001, 0.9999)
+
+    @staticmethod
+    def get_alph_bet(timesteps: int, schedule: Callable[[int], Tensor]) -> dict[
+        str, Union[Tensor, float]]:
+        """
+        Get alpha and beta values for each timestep
+        :param timesteps: Number of timesteps
+        :param schedule: Beta schedule to use
+        :return: Alpha and beta values for each timestep
+        """
+        betas = schedule(timesteps)
+        alphas = 1. - betas
+        alphas_cumprod = torch.cumprod(alphas, axis=0)
+        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+        sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+        sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+        sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+        posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+
+        const_dict = {
+            'betas': betas,
+            'sqrt_recip_alphas': sqrt_recip_alphas,
+            'sqrt_alphas_cumprod': sqrt_alphas_cumprod,
+            'sqrt_one_minus_alphas_cumprod': sqrt_one_minus_alphas_cumprod,
+            'posterior_variance': posterior_variance
+        }
+
+        return const_dict
+
+    @staticmethod
+    def extract(constants: Union[Tensor, float], batch_t: Tensor, x_shape: tuple[int, int, int]) -> Tensor:
+        """
+        Extract the image from the batch
+        :param constants: Constants for the model
+        :param batch_t: Batch of images
+        :param x_shape: Shape of the images
+        :return: Extracted image
+        """
+        diffusion_batch_size = batch_t.shape[0]
+        out = (constants.gather(-1, batch_t.cpu())
+               .reshape(diffusion_batch_size, *((1,) * (len(x_shape) - 1)))
+               .to(batch_t.device))
+        return out
+
+    @staticmethod
+    def q_sample(constants_dict: dict[str, Union[Tensor, float]], batch_x0: Tensor, batch_t: Tensor,
+                 noise: Optional[Tensor]=None) -> Tensor:
+        """
+        Sample from the model
+        :param constants_dict: Constants for the model
+        :param batch_x0: Batch of images
+        :param batch_t: Batch of timesteps
+        :param noise: Noise to add to the images
+        :return: Sampled images
+        """
+        if noise is None:
+            noise = torch.randn_like(batch_x0)
+
+        sqrt_alpas_cumprod_t = Diffusion.extract(constants_dict['sqrt_alphas_cumprod'], batch_t, batch_x0.shape)
+        sqrt_one_minus_alphas_cumprod_t = Diffusion.extract(constants_dict['sqrt_one_minus_alphas_cumprod'],
+                                                                 batch_t, batch_x0.shape)
+
+        return sqrt_alpas_cumprod_t * batch_x0 + sqrt_one_minus_alphas_cumprod_t * noise
+
+
+class DiffusionModelTrainer:
+    """ Class to train the model """
+
+    def __init__(self,
+                 data_set: list[np.ndarray],
+                 val_split: float,
+                 batch_size: int,
+                 model: nn.Module,
+                 criterion: nn.Module,
+                 optimizer: torch.optim.Optimizer,
+                 device: torch.device
+                ):
+        self.batch_size = batch_size
+        self.train_loader, self.val_loader, self.unused_images = self.split_train_val(data_set, val_split, batch_size)
         self.model = model
-        self.loss_fn = loss_fn
+        self.criterion = criterion
         self.optimizer = optimizer
+        self.device = device
 
+    @staticmethod
+    def split_train_val(data_set: list[np.ndarray], val_split: float, batch_size: int,
+                        verbose: VerboseLevel=VerboseLevel.PRINT) -> Tuple[TorchDataLoader, TorchDataLoader, Subset[np.ndarray]]:
+        """
+        Split data into train val and unused sets, with keeping val_split part of the data to validation set.
+        Some images are unused due to the fact that we want a multiple of batch_size in each subset
+        :param data_set: dataset of images to split
+        :param val_split: part to use for the validation set
+        :param batch_size: number of images per batch
+        :param verbose: Verbosity level to print info about the splits
+        :return: train and val torch data loaders and unused images
+        """
+        assert 0. <= val_split < 1., "Val_split must be between 0 and 1 (excluded) to cut the dataset."
+        assert len(data_set) >= batch_size, "Batch size greater than the data set: cannot create data loaders."
+        unused_size = len(data_set) % batch_size
+        val_size = batch_size * int((val_split * (len(data_set) - unused_size) // batch_size) // 1)
+        train_size = len(data_set) - unused_size - val_size
+
+        assert train_size > 0, "Train set is empty, consider decreasing the val_split or the batch_size"
+        if val_size == 0 and val_split > 0.:
+            warnings.warn("WARNING: val set is empty, consider increasing the val_split or decreasing the batch_size")
+
+        if verbose >= VerboseLevel.PRINT:
+            print(f'{train_size} images ({train_size // batch_size} batchs) for train, '
+                  f'{val_size} images ({val_size // batch_size} batchs) for validation, '
+                  f'({train_size / len(data_set):.1%}-{val_size / len(data_set):.1%})'
+                  f'\n{unused_size} images left unused.')
+
+        train_images, val_images, unused_images = random_split(data_set, [train_size, val_size, unused_size])
+        return (TorchDataLoader(dataset=train_images, batch_size=batch_size, shuffle=True),
+                TorchDataLoader(dataset=val_images, batch_size=batch_size, shuffle=True),
+                unused_images)
+
+    @staticmethod
+    def normalize_batch_images(batch: torch.Tensor, verbose: VerboseLevel=VerboseLevel.TQDM):
+        """
+        Normalize each image individually in the batch between -1 and 1 using a MinMax scaling
+        :param batch: images to normalize, shape b x c x h x w
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: the normalized images as a batch
+        """
+        normalized_images = []
+        for image in tqdm(batch, disable=verbose < VerboseLevel.TQDM, desc="Normalizing images in batch"):
+            normalized_images.append(min_max_scaling(image=image, lower_lim=-1., upper_lim=1.))
+        return torch.stack(normalized_images)
+
+    def train(self, epochs: int, timesteps: int, constants_scheduler: Callable[[int], Tensor],
+              save_model_path: Optional[str]=None, save_losses_path: Optional[str]=None,
+              save_intermediate_models: Optional[dict[str, Union[bool, int]]]=None,
+              verbose: VerboseLevel=VerboseLevel.TQDM) -> dict[int, dict[str, float]]:
+        """
+        Train the model
+        :param epochs: Number of epochs to train the model
+        :param timesteps: Number of timesteps to use for the model
+        :param constants_scheduler: Function to get the constants for the model
+        :param save_model_path: Path to save the model, not saved if None
+        :param save_losses_path: Path to save the loss graph
+        :param save_intermediate_models: Dictionary with keys 'toggle' and 'frequency' to save the model every 'frequency' epochs
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: Training history with train and validation losses
+        """
+        if save_intermediate_models is None:
+            save_intermediate_models = {'toggle': False, 'frequency': 1}
+        constants_dict = Diffusion.get_alph_bet(timesteps, constants_scheduler)
+        timesteps_val = torch.randint(0, timesteps, (self.batch_size,), device=self.device).long()  # fixed time steps for validation
+
+        history = {}
+        best_val_loss = float('inf')  # Start with an infinitely high loss
+        best_model_state = None  # To save the best model
+        best_epoch = 0
+        epochs_loop = tqdm(range(epochs), disable=verbose < VerboseLevel.TQDM, desc='Training epochs')
+        for epoch in epochs_loop:
+            train_loss = self.train_epoch(timesteps=timesteps, epoch=epoch+1, constants_dict=constants_dict, verbose=verbose)
+            val_loss = self.val_epoch(epoch=epoch+1, constants_dict=constants_dict, timesteps_val=timesteps_val, verbose=verbose)
+            if verbose >= VerboseLevel.PRINT:
+                print(f'Epoch {epoch + 1} - Train loss: {train_loss:.5f} - Val loss: {val_loss:.5f}')
+            history[epoch + 1] = {'train_loss': train_loss, 'val_loss': val_loss}
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model_state = self.model.state_dict()
+                best_epoch = epoch + 1
+            epochs_loop.set_postfix(best_epoch=best_epoch, best_val_loss=best_val_loss)
+            if (save_model_path is not None and save_intermediate_models['toggle']
+                    and (epoch + 1) % save_intermediate_models['frequency'] == 0):
+                torch.save(self.model.state_dict(), save_model_path.format(f'-epoch-{epoch + 1}-'))
+        if verbose >= VerboseLevel.PRINT:
+            print(f'Best epoch: {best_epoch + 1} - Best val loss: {best_val_loss:.5f}')
+
+        if save_model_path is not None:
+            torch.save(best_model_state, save_model_path.format(f'-best-epoch-{best_epoch}-'))
+
+        self.monitor_training(history=history, best_epoch=best_epoch, save_losses_path=save_losses_path, logscale=False,
+                              verbose=verbose)
+        self.monitor_training(history=history, best_epoch=best_epoch, save_losses_path=save_losses_path, logscale=True,
+                              verbose=verbose)
+        return history
+
+    def train_epoch(self, timesteps: int, epoch: int, constants_dict: dict[str, Union[Tensor, float]],
+                    verbose: VerboseLevel=VerboseLevel.TQDM) -> float:
+        """
+        Train the model for one epoch
+        :param timesteps: Number of timesteps to use for the model
+        :param epoch: Current epoch
+        :param constants_dict: Constants for the model
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: Training loss
+        """
+        self.model.train()
+        train_loss = 0.
+        i = 0
+        epoch_loop = tqdm(self.train_loader, disable=verbose < VerboseLevel.TQDM, desc=f'* Epoch {epoch} - Training batches')
+        for batch in epoch_loop:
+            i += 1
+            self.optimizer.zero_grad()
+
+            batch_size_iter = batch.shape[0]
+            batch = batch.to(self.device)
+            batch_image = self.normalize_batch_images(batch, verbose=VerboseLevel.NONE) # too much verbosity else
+
+            batch_t = torch.randint(0, timesteps, (batch_size_iter,), device=self.device).long()
+            noise = torch.randn_like(batch_image)
+
+            x_noisy = Diffusion.q_sample(constants_dict, batch_image, batch_t, noise=noise)
+            predicted_noise = self.model(x_noisy, batch_t)
+
+            loss = self.criterion(noise, predicted_noise)
+            loss.backward()
+            self.optimizer.step()
+            train_loss += loss.item()
+            epoch_loop.set_postfix(loss=train_loss / i)
+        train_loss /= len(self.train_loader)
+        return train_loss
+
+    def val_epoch(self, epoch: int, constants_dict: dict[str, Union[Tensor, float]], timesteps_val: Tensor,
+                  verbose: VerboseLevel=VerboseLevel.TQDM) -> float:
+        """
+        Validate the model for one epoch
+        :param epoch: Current epoch
+        :param constants_dict: Constants for the model
+        :param timesteps_val: Timesteps to use for the validation
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: Validation loss
+        """
+        self.model.eval()
+        val_loss = 0.
+        i = 0
+        with torch.no_grad():
+            epoch_loop = tqdm(self.val_loader, disable=verbose < VerboseLevel.TQDM, desc=f'* Epoch {epoch} - Validation batches')
+            for batch in epoch_loop:
+                i += 1
+                batch_image = batch.to(self.device)
+                batch_t = timesteps_val
+
+                noise = torch.randn_like(batch_image)
+
+                x_noisy = Diffusion.q_sample(constants_dict, batch_image, batch_t, noise=noise)
+                predicted_noise = self.model(x_noisy, batch_t)
+
+                loss = self.criterion(noise, predicted_noise)
+                val_loss += loss.item()
+                epoch_loop.set_postfix(loss=val_loss / i)
+        val_loss /= len(self.val_loader)
+        return val_loss
+
+    @staticmethod
+    def monitor_training(history: dict[int, dict[str, float]], best_epoch: int, save_losses_path: Optional[str],
+                         logscale: bool, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
+        """
+        Monitor the training by plotting the losses
+        :param history: Training history with train and validation losses
+        :param best_epoch: Best epoch
+        :param save_losses_path: Path to save the loss graph
+        :param logscale: Whether to use a log scale for the losses
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: Training history with train and validation losses
+        """
+        train_losses = np.array([history[epoch]['train_loss'] for epoch in history])
+        val_losses = np.array([history[epoch]['val_loss'] for epoch in history])
+        epochs = np.array(history.keys())
+
+        # After training, plot the train and validation losses
+        plt.figure(figsize=(10, 6))
+        plt.plot(epochs, train_losses, label='Train Loss', color='blue')
+        plt.plot(epochs, val_losses, label='Validation Loss', color='red')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.title('Training and Validation Loss Over Epochs')
+        plt.legend()
+        plt.grid(True)
+        if save_losses_path is not None:
+            plt.savefig(save_losses_path.format('_loss-monitoring_'))
+        if verbose >= VerboseLevel.DISPLAY:
+            plt.show()
+        else:
+            plt.close()
+
+        # Log-scale
+        fig = plt.figure(figsize=(10, 6))
+        ax = fig.add_subplot(111)
+
+        ax.plot(epochs, train_losses, label='Train Loss', color='blue')
+        ax.plot(epochs, val_losses, label='Validation Loss', color='red')
+
+        ax.scatter(x=best_epoch, y=val_losses[best_epoch], label='Best Epoch', color='k', marker='x', zorder=2)
+        ax.vlines(x=best_epoch, ymin=-1, ymax=val_losses[best_epoch], colors='green', linestyles='dotted')
+        ax.hlines(xmin=-10, xmax=best_epoch, y=val_losses[best_epoch], colors='green', linestyles='dotted')
+
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        if logscale:
+            plt.yscale('log')
+        x_ticks = np.append(ax.get_xticks(), best_epoch)
+        y_ticks = np.append(ax.get_yticks(), val_losses[best_epoch])
+        ax.set_xticks(x_ticks)
+        ax.set_yticks(y_ticks)
+        ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
+        plt.xlim(-5, epochs[-1] + 5)
+        if logscale:
+            plt.ylim(10 ** np.floor(np.log10(min(val_losses.min(), train_losses.min()))),
+                     10 ** np.ceil(np.log10(max(val_losses.max(), train_losses.max()))))
+        else:
+            plt.ylim(-0.1, max(val_losses.max(), train_losses.max()) + 0.1)
+        plt.title('Training and Validation Loss Over Epochs (log-scale)')
+        plt.legend()
+        plt.grid(which='both', axis='both')
+        if save_losses_path is not None:
+            plt.savefig(save_losses_path.format('_loss-monitoring' + ('-log_' if logscale else '.jpg')))
+        if verbose >= VerboseLevel.DISPLAY:
+            plt.show()
+        else:
+            plt.close()

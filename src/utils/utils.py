@@ -17,6 +17,14 @@ class VerboseLevel(Enum):
     def __lt__(self, other):
         return self.value < other.value
 
+    def __le__(self, other):
+        return self.value <= other.value
+
+    def __gt__(self, other):
+        return self.value > other.value
+
+    def __ge__(self, other):
+        return self.value >= other.value
 
 def format_duration(duration):
     td = datetime.timedelta(seconds=duration)
@@ -71,3 +79,10 @@ def plot_confusion_matrix(cm, classes,
 
     print(f'Categorization Accuracy : {np.trace(cm) / np.sum(cm):.2%}')
     return np.trace(cm) / np.sum(cm)
+
+def min_max_scaling(image: np.ndarray, lower_lim: float, upper_lim: float):
+    """Min Max scaler of an image between lower_lim and upper_lim"""
+    assert lower_lim < upper_lim, ("Lower lim should be strictly lower than upper lim. Get lower_lim={lower_lim}, "
+                                   "upper_lim={upper_lim}.")
+
+    return (upper_lim - lower_lim) * (image - image.min()) / (image.max() - image.min()) + lower_lim

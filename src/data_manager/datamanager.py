@@ -8,9 +8,11 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import pandas as pd
+import torch
+from torchvision.utils import make_grid
 from tqdm.notebook import tqdm
 
-from src.utils.utils import VerboseLevel
+from src.utils.utils import VerboseLevel, min_max_scaling
 
 
 class DataLoader:
@@ -214,10 +216,10 @@ class DataDisplayer:
 
     def display_examples(self, image_type: str='image_data', data_name: Optional[str]=None,
                          groups: Optional[list[str]]=None, image_names: Optional[list[str]]=None,
-                         ids: Optional[list[str]]=None, sort_by: Optional[tuple[str]]=None,
+                         ids: Optional[list[str]]=None, sort_by: Optional[tuple[str, ...]]=None,
                          nb_examples: Optional[int]=None, per_combination: bool=False,
-                         format_sep: Optional[tuple[str]] = None,
-                         format_categories: Optional[tuple[str]] = None) -> None:
+                         format_sep: Optional[tuple[str, ...]] = None,
+                         format_categories: Optional[tuple[str, ...]] = None) -> None:
         """
         Display examples based on the provided parameters.
         :param image_type: types of the images to display (ex: 'image_data', 'image_interest_part_data')
@@ -341,6 +343,38 @@ class DataDisplayer:
         output.append(start_prefix + data_name)
         display_data_arborescence_recursive(self.data_loader.data, start_level, start_prefix)
         return "\n".join(output)
+
+    @staticmethod
+    def display_batch(batch: torch.Tensor, filename: Optional[str]=None, one_hot_encode: bool=False) -> None:
+        """ Display a batch of images, with possibility to save the display.
+        :param batch: images to display. Must be a tensor of shape b x c x h x w
+        :param filename: Optional path to save the display if needed
+        :param one_hot_encode: use a argmax encoder along the channel dimension
+        """
+        image = np.array(
+            torch.permute(make_grid(batch, nrow=int(np.sqrt(len(batch))), padding=0),(1, 2, 0)).cpu())
+        image = min_max_scaling(image=image, lower_lim=0., upper_lim=1.)
+        if image.shape[-1] > 3:
+            if one_hot_encode:
+                image = DataTransformer.one_hot_encode(image)
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+            axes[0].imshow(image[..., 1:4])
+            axes[0].set_title("RGB Channels")
+            axes[0].axis('off')
+            im_bg = axes[1].imshow(image[..., 0], cmap='viridis')
+            axes[1].set_title("Background Intensity")
+            axes[1].axis('off')
+            cbar = fig.colorbar(im_bg, ax=axes[1], orientation='vertical', fraction=0.046, pad=0.04)
+            cbar.set_label("Intensity")
+            plt.tight_layout()
+            if filename:
+                fig.savefig(filename)
+            plt.show()
+        else:
+            plt.imshow(image, cmap='gray')
+            if filename:
+                plt.savefig(filename)
+            plt.show()
 
 
 class DataTransformer:
