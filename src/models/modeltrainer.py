@@ -2,6 +2,7 @@ import warnings
 from typing import Tuple, Union, Callable, Optional
 
 import matplotlib
+import matplotlib.ticker
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -392,10 +393,24 @@ class Diffusion:
             predicted_noise = model(batch_xt, batch_t)
 
             batch_xt = self.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
+            batch_xt = self.normalize_batch_images(batch_xt, verbose=VerboseLevel.NONE) # too much verbosity else
 
             imgs.append(batch_xt.cpu())
 
         return imgs
+
+    @staticmethod
+    def normalize_batch_images(batch: torch.Tensor, verbose: VerboseLevel=VerboseLevel.TQDM):
+        """
+        Normalize each image individually in the batch between -1 and 1 using a MinMax scaling
+        :param batch: images to normalize, shape b x c x h x w
+        :param verbose: Verbosity level to display tqdm progress bar
+        :return: the normalized images as a batch
+        """
+        normalized_images = []
+        for image in tqdm(batch, disable=verbose < VerboseLevel.TQDM, desc="Normalizing images in batch between -1 and 1"):
+            normalized_images.append(min_max_scaling(image=image, lower_lim=-1., upper_lim=1.))
+        return torch.stack(normalized_images)
 
 
 class DiffusionModelTrainer:
@@ -418,13 +433,18 @@ class DiffusionModelTrainer:
         self.device = device
 
     @staticmethod
-    def split_train_val(data_set: list[np.ndarray], val_split: float, batch_size: int,
-                        verbose: VerboseLevel=VerboseLevel.PRINT) -> Tuple[TorchDataLoader, TorchDataLoader, Subset[np.ndarray]]:
+    def split_train_val(data_set: list[np.ndarray], val_split: float, batch_size: int, filename: Optional[str]=None,
+                        one_hot_encode: bool=False, grid_shape: Optional[Tuple[int, int]]=None,
+                        verbose: VerboseLevel=VerboseLevel.PRINT)\
+            -> Tuple[TorchDataLoader, TorchDataLoader, Subset[np.ndarray]]:
         """
         Split data into train val and unused sets, with keeping val_split part of the data to validation set.
         Some images are unused due to the fact that we want a multiple of batch_size in each subset
         :param data_set: dataset of images to split
         :param val_split: part to use for the validation set
+        :param filename: filename to save the examples of the train and validation sets, if None, no saving
+        :param one_hot_encode: whether to one-hot encode the images or not for display or saving
+        :param grid_shape: shape of the grid to display the examples, if None and images displayed or saved, use default
         :param batch_size: number of images per batch
         :param verbose: Verbosity level to print info about the splits
         :return: train and val torch data loaders and unused images
@@ -446,25 +466,26 @@ class DiffusionModelTrainer:
                   f'\n{unused_size} images left unused.')
 
         train_images, val_images, unused_images = random_split(data_set, [train_size, val_size, unused_size])
-        return (TorchDataLoader(dataset=train_images, batch_size=batch_size, shuffle=True),
-                TorchDataLoader(dataset=val_images, batch_size=batch_size, shuffle=True),
-                unused_images)
+        train_dataloader = TorchDataLoader(dataset=train_images, batch_size=batch_size, shuffle=True)
+        val_dataloader = TorchDataLoader(dataset=val_images, batch_size=batch_size, shuffle=True)
 
-    @staticmethod
-    def normalize_batch_images(batch: torch.Tensor, verbose: VerboseLevel=VerboseLevel.TQDM):
-        """
-        Normalize each image individually in the batch between -1 and 1 using a MinMax scaling
-        :param batch: images to normalize, shape b x c x h x w
-        :param verbose: Verbosity level to display tqdm progress bar
-        :return: the normalized images as a batch
-        """
-        normalized_images = []
-        for image in tqdm(batch, disable=verbose < VerboseLevel.TQDM, desc="Normalizing images in batch"):
-            normalized_images.append(min_max_scaling(image=image, lower_lim=-1., upper_lim=1.))
-        return torch.stack(normalized_images)
+        if verbose >= VerboseLevel.DISPLAY or filename is not None:
+            # Display examples of the train and validation sets
+            filename_train = filename.format('_train-example.jpg') if filename is not None else None
+            filename_val = filename.format('_val-example.jpg') if filename is not None else None
+            train_batch_example = next(iter(train_dataloader))
+            val_batch_example = next(iter(val_dataloader))
+            DataDisplayer.display_batch(train_batch_example, grid_shape=grid_shape, show=verbose >= VerboseLevel.DISPLAY,
+                                        filename=filename_train, title='Train batch example',
+                                        one_hot_encode=one_hot_encode)
+            DataDisplayer.display_batch(val_batch_example, grid_shape=grid_shape, show=verbose >= VerboseLevel.DISPLAY,
+                                        filename=filename_val, title='Train batch example',
+                                        one_hot_encode=one_hot_encode)
+
+        return train_dataloader, val_dataloader, unused_images
 
     def train(self, epochs: int, timesteps: int, constants_scheduler: Callable[[int], Tensor],
-              save_model_path: Optional[str]=None, save_losses_path: Optional[str]=None,
+              save_model_path: Optional[str]=None, save_images_path: Optional[str]=None,
               save_intermediate_models: Optional[dict[str, Union[bool, int]]]=None,
               verbose: VerboseLevel=VerboseLevel.TQDM) -> dict[int, dict[str, float]]:
         """
@@ -473,7 +494,7 @@ class DiffusionModelTrainer:
         :param timesteps: Number of timesteps to use for the model
         :param constants_scheduler: Function to get the constants for the model
         :param save_model_path: Path to save the model, not saved if None
-        :param save_losses_path: Path to save the loss graph
+        :param save_images_path: Path to save the images (losses monitoring or examples), not saved if None
         :param save_intermediate_models: Dictionary with keys 'toggle' and 'frequency' to save the model every 'frequency' epochs
         :param verbose: Verbosity level to display tqdm progress bar
         :return: Training history with train and validation losses
@@ -501,16 +522,16 @@ class DiffusionModelTrainer:
             epochs_loop.set_postfix(best_epoch=best_epoch, best_val_loss=best_val_loss)
             if (save_model_path is not None and save_intermediate_models['toggle']
                     and (epoch + 1) % save_intermediate_models['frequency'] == 0):
-                torch.save(self.model.state_dict(), save_model_path.format(f'-epoch-{epoch + 1}-'))
+                torch.save(self.model.state_dict(), save_model_path.format(f'epoch-{epoch + 1}'))
         if verbose >= VerboseLevel.PRINT:
             print(f'Best epoch: {best_epoch + 1} - Best val loss: {best_val_loss:.5f}')
 
         if save_model_path is not None:
-            torch.save(best_model_state, save_model_path.format(f'-best-epoch-{best_epoch}-'))
+            torch.save(best_model_state, save_model_path.format(f'best-epoch-{best_epoch}'))
 
-        self.monitor_training(history=history, best_epoch=best_epoch, save_losses_path=save_losses_path, logscale=False,
+        self.monitor_training(history=history, best_epoch=best_epoch, save_images_path=save_images_path, logscale=False,
                               verbose=verbose)
-        self.monitor_training(history=history, best_epoch=best_epoch, save_losses_path=save_losses_path, logscale=True,
+        self.monitor_training(history=history, best_epoch=best_epoch, save_images_path=save_images_path, logscale=True,
                               verbose=verbose)
         return history
 
@@ -534,7 +555,7 @@ class DiffusionModelTrainer:
 
             batch_size_iter = batch.shape[0]
             batch = batch.to(self.device)
-            batch_image = self.normalize_batch_images(batch, verbose=VerboseLevel.NONE) # too much verbosity else
+            batch_image = Diffusion.normalize_batch_images(batch, verbose=VerboseLevel.NONE) # too much verbosity else
 
             batch_t = torch.randint(0, timesteps, (batch_size_iter,), device=self.device).long()
             noise = torch.randn_like(batch_image)
@@ -582,13 +603,13 @@ class DiffusionModelTrainer:
         return val_loss
 
     @staticmethod
-    def monitor_training(history: dict[int, dict[str, float]], best_epoch: int, save_losses_path: Optional[str],
+    def monitor_training(history: dict[int, dict[str, float]], best_epoch: int, save_images_path: Optional[str],
                          logscale: bool, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
         """
         Monitor the training by plotting the losses
         :param history: Training history with train and validation losses
         :param best_epoch: Best epoch
-        :param save_losses_path: Path to save the loss graph
+        :param save_images_path: Path to save the loss graph
         :param logscale: Whether to use a log scale for the losses
         :param verbose: Verbosity level to display tqdm progress bar
         :return: Training history with train and validation losses
@@ -606,8 +627,8 @@ class DiffusionModelTrainer:
         plt.title('Training and Validation Loss Over Epochs')
         plt.legend()
         plt.grid(True)
-        if save_losses_path is not None:
-            plt.savefig(save_losses_path.format('_loss-monitoring_'))
+        if save_images_path is not None:
+            plt.savefig(save_images_path.format('_loss-monitoring.jpg'))
         if verbose >= VerboseLevel.DISPLAY:
             plt.show()
         else:
@@ -642,8 +663,8 @@ class DiffusionModelTrainer:
         plt.title('Training and Validation Loss Over Epochs (log-scale)')
         plt.legend()
         plt.grid(which='both', axis='both')
-        if save_losses_path is not None:
-            plt.savefig(save_losses_path.format('_loss-monitoring' + ('-log_' if logscale else '.jpg')))
+        if save_images_path is not None:
+            plt.savefig(save_images_path.format('_loss-monitoring' + ('-log.jpg' if logscale else '.jpg')))
         if verbose >= VerboseLevel.DISPLAY:
             plt.show()
         else:

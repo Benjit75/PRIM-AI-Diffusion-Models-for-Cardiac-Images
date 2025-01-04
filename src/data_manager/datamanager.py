@@ -1,6 +1,7 @@
 import gzip
+import IPython.display
 import os
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 import shutil
 
 import cv2
@@ -8,11 +9,14 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import pandas as pd
+from PIL import ImageDraw, ImageFont
 import torch
+from torch import Tensor
+from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 from tqdm.notebook import tqdm
 
-from src.utils.utils import VerboseLevel, min_max_scaling
+from src.utils.utils import VerboseLevel, find_divisors, assert_all_same_values_list, assert_or_create_grid_size
 
 
 class DataLoader:
@@ -345,36 +349,249 @@ class DataDisplayer:
         return "\n".join(output)
 
     @staticmethod
-    def display_batch(batch: torch.Tensor, filename: Optional[str]=None, one_hot_encode: bool=False) -> None:
+    def display_batch(batch: torch.Tensor, grid_shape: Optional[Tuple[int, int]]=None, show: bool=True,
+                      filename: Optional[str]=None, title: Optional[str]=None, one_hot_encode: bool=False) -> None:
         """ Display a batch of images, with possibility to save the display.
         :param batch: images to display. Must be a tensor of shape b x c x h x w
+        :param grid_shape: shape of the grid to display the images, shape row x col and row * col = batch_size
+        :param show: whether to display the images or not, for saving only purposes
         :param filename: Optional path to save the display if needed
+        :param title: Optional title to display
         :param one_hot_encode: use a argmax encoder along the channel dimension
         """
+        if filename is None and not show:
+            # Nothing to display or save, skipping
+            return
+
+        # Verify that the grid shape is correct or find the nearest square grid shape
+        n_row, n_col = assert_or_create_grid_size(desired_size=len(batch), given_size=grid_shape)
+
         image = np.array(
-            torch.permute(make_grid(batch, nrow=int(np.sqrt(len(batch))), padding=0),(1, 2, 0)).cpu())
-        image = min_max_scaling(image=image, lower_lim=0., upper_lim=1.)
+            torch.permute(make_grid(batch, nrow=n_col, padding=0),(1, 2, 0)).cpu())
+        image = (image + np.ones(image.shape)) / 2. # Scale the normalization from [-1, 1] to [0, 1]
         if image.shape[-1] > 3:
             if one_hot_encode:
                 image = DataTransformer.one_hot_encode(image)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6))
             axes[0].imshow(image[..., 1:4])
-            axes[0].set_title("RGB Channels")
+            axes[0].set_title(("" if title is None else f"{title} - ") + "RGB Channels")
             axes[0].axis('off')
             im_bg = axes[1].imshow(image[..., 0], cmap='viridis')
-            axes[1].set_title("Background Intensity")
+            axes[1].set_title(("" if title is None else f"{title} - ") + "Background Intensity")
             axes[1].axis('off')
             cbar = fig.colorbar(im_bg, ax=axes[1], orientation='vertical', fraction=0.046, pad=0.04)
             cbar.set_label("Intensity")
             plt.tight_layout()
             if filename:
                 fig.savefig(filename)
-            plt.show()
+            if show:
+                plt.show()
+            else:
+                plt.close()
         else:
             plt.imshow(image, cmap='gray')
             if filename:
                 plt.savefig(filename)
+            if show:
+                plt.show()
+            else:
+                plt.close()
+
+    @staticmethod
+    def display_batches_comparisons(batches, grid_shape: Optional[Tuple[int, int]]=None, show: bool=True,
+                                    filename: Optional[str]=None, one_hot_encode: bool=False, title: Optional[str]=None,
+                                    labels: Optional[list[str]]=None) -> None:
+        """
+        Display a grid of size (1 row, n columns) with each cell showing a grid of images from one batch.
+        :param batches: List of tensors of shape torch.Size([16, 4, 128, 128]).
+        :param grid_shape: Tuple of (rows, columns) for the grid corresponding of 1 batch, see display_batch for more details.
+        :param show: Whether to display the images or not, for saving only purposes. See display_batch for more details.
+        :param filename: Optional path to save the display if needed.
+        :param one_hot_encode: Whether to one-hot encode the images for display.
+        :param title: Optional title to display.
+        :param labels: Optional list of labels to display for each batch.
+        """
+        if filename is None and not show:
+            # Nothing to display or save, skipping
+            return
+
+        fig, axes = plt.subplots(1, len(batches), figsize=(18, 6))
+
+        # Verify that all batches have the same shape
+        assert_all_same_values_list(
+            list_of_elements=batches,
+            element_name=('batch', 'es'),
+            value_compute_fun=lambda b: b.shape,
+            value_name=('shape', 's')
+        )
+
+        # Verify that the grid shape is correct or find the nearest square grid shape
+        n_row, n_col = assert_or_create_grid_size(desired_size=batches[0].shape[0], given_size=grid_shape)
+
+        for i, batch in enumerate(batches):
+            image = np.array(torch.permute(make_grid(batch, nrow=n_col, padding=0), (1, 2, 0)).cpu())
+            image = (image + np.ones(image.shape)) / 2. # Scale the normalization from [-1, 1] to [0, 1]
+
+            if image.shape[-1] > 3:
+                if one_hot_encode:
+                    image = DataTransformer.one_hot_encode(image)
+                axes[i].imshow(image[..., 1:4]) # Display RGB channels only
+            else:
+                axes[i].imshow(image, cmap='gray')
+
+            axes[i].axis('off')
+            axes[i].set_title(labels[i] if labels else f"Batch {i+1}")
+
+        plt.tight_layout()
+        if title:
+            fig.suptitle(title, fontsize=16)
+        if filename:
+            plt.savefig(filename)
+        if show:
             plt.show()
+        else:
+            plt.close()
+
+    @staticmethod
+    def make_gif(frame_list: list[Tensor], filename: str, grid_size: Optional[Tuple[int, int]]=None,
+                 step: int=5, one_hot_encode: bool=False, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
+        """
+        Create a GIF from a list of frames corresponding to a batch of images at different timesteps and save it.
+        :param frame_list: List of frames to create the GIF from.
+        :param filename: path to save the GIF.
+        :param grid_size: Size of the grid to display the images, shape row x col and row * col = batch_size.
+        :param step: Step to take between frames.
+        :param one_hot_encode: Whether to one-hot encode the images for display.
+        :param verbose: Whether to display the gif created.
+        """
+        to_pil = ToPILImage()
+
+        # Verify that all frames have the same shape
+        assert_all_same_values_list(
+            list_of_elements=frame_list,
+            element_name=('frame', 's'),
+            value_compute_fun=lambda f: f.shape,
+            value_name=('shape', 's')
+        )
+
+        # Verify that the grid size is correct or find the nearest square grid size
+        n_row, n_col = assert_or_create_grid_size(desired_size=len(frame_list[0]), given_size=grid_size)
+
+        frames = [np.array(torch.permute(make_grid(tens_im, nrow=n_col, padding=0), (1,2,0)).cpu()) for tens_im in frame_list]
+        frames = [(frame + np.ones(frame.shape))/2. for frame in frames] # Scale the normalization from [-1, 1] to [0, 1]
+        frames_to_include = frames[0::step] # Take every step frames
+        if len(frames) % step != 0:
+            frames_to_include.append(frames[-1]) # Add the last frame if not included
+        if frames_to_include[0].shape[-1] > 3:
+            if one_hot_encode:
+                frames_to_include = [DataTransformer.one_hot_encode(frame) for frame in frames_to_include]
+            frames_to_include = [frame[..., 1:4] for frame in frames_to_include] # Display RGB channels only
+        frames_pil = [to_pil(frame) for frame in frames_to_include]
+        frame_one = frames_pil[0]
+
+        frame_one.save(filename, format="GIF", append_images=frames_pil[1::], save_all=True, duration=10, loop=0)
+        if verbose >= VerboseLevel.PRINT:
+            print(f"Saved GIF at {filename}.")
+        if verbose >= VerboseLevel.DISPLAY:
+            IPython.display.display(IPython.display.Image(filename=filename))
+
+    @staticmethod
+    def make_gif_comparison(frame_lists: list[list[Tensor]], filename: str, grid_size: Optional[Tuple[int, int]]=None,
+                            step: int=5, one_hot_encode: bool=False, padding: int=10, title: Optional[str]=None,
+                            subtitles: Optional[str]=None, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
+        """
+        Create and save a GIF of grid (1 row, n columns) from a list of several frames list corresponding to a batch of
+        images at different timesteps for different sampling and save it.
+        :param frame_lists: List of frame lists to create the GIF from.
+        :param filename: path to save the GIF.
+        :param grid_size: Size of the grid to display the images, shape row x col and row * col = the size of the batch.
+        :param step: Step to take between frames.
+        :param one_hot_encode: Whether to one-hot encode the images for display.
+        :param padding: Padding to add between the images.
+        :param title: Optional title to display.
+        :param subtitles: Optional subtitles to display.
+        :param verbose: Whether to display the progress bar and the gif created.
+        """
+        to_pil = ToPILImage()
+
+        # Verify that all list have the same length
+        assert_all_same_values_list(
+            list_of_elements=frame_lists,
+            element_name=('frame list', 's'),
+            value_compute_fun=lambda f: len(f),
+            value_name=('length', 's')
+        )
+
+        # Verify that all frames have the same shape in each list
+        assert_same_shape_loop = tqdm(frame_lists, disable=verbose < VerboseLevel.TQDM, desc="Checking frames shapes")
+        for frame_list in assert_same_shape_loop:
+            assert_all_same_values_list(
+                list_of_elements=frame_list,
+                element_name=('frame', 's'),
+                value_compute_fun=lambda f: f.shape,
+                value_name=('shape', 's')
+            )
+
+        # Verify that all lists have elements with the same shape
+        assert_all_same_values_list(
+            list_of_elements=frame_lists,
+            element_name=('frame list', 's'),
+            value_compute_fun=lambda f: f[0].shape,
+            value_name=('shape', 's')
+        )
+
+        # Verify that the grid size is correct or find the nearest square grid size
+        n_row, n_col = assert_or_create_grid_size(desired_size=len(frame_lists[0][0]), given_size=grid_size)
+
+        num_batches = len(frame_lists)
+        num_timesteps = len(frame_lists[0])
+        frames = []
+        font = ImageFont.load_default()
+
+        # Create the frames for the GIF
+        for t in tqdm(range(0, num_timesteps, step), disable=verbose < VerboseLevel.TQDM, desc="Creating frames"):
+            row_images = []
+            for b in range(num_batches):
+                batch = frame_lists[b][t]
+                image = np.array(
+                    torch.permute(make_grid(batch, nrow=n_col, padding=0), (1, 2, 0)).cpu())
+                image = (image + np.ones(image.shape)) / 2.0 # Scale the normalization from [-1, 1] to [0, 1]
+                if image.shape[-1] > 3:
+                    if one_hot_encode:
+                        image = DataTransformer.one_hot_encode(image)
+                    image = image[..., 1:4] # Display RGB channels only
+                row_images.append(image)
+
+            # Concatenate row images into one frame
+            padded_row = np.concatenate(
+                [np.pad(img, ((0, 0), (padding, padding), (0, 0)), constant_values=1) if idx != num_batches - 1 else img for
+                 idx, img in enumerate(row_images)], axis=1)
+
+            # Convert the row to an image and overlay text
+            frame = to_pil(padded_row)
+            draw = ImageDraw.Draw(frame)
+
+            # Add the title if specified
+            if title:
+                draw.text((frame.width // 2 - len(title) * 3, 5), title, fill="black", font=font, anchor="mm")
+
+            # Add subtitles for each epoch
+            if subtitles:
+                column_width = frame.width // num_batches
+                for i, subtitle in enumerate(subtitles):
+                    x_position = column_width * i + column_width // 2
+                    draw.text((x_position, 20), subtitle, fill="black", font=font, anchor="mm")
+
+            frames.append(frame)
+
+        # Save the frames as a GIF
+        frame_one = frames[0]
+        frame_one.save(filename, format="GIF", append_images=frames[1:], save_all=True, duration=10, loop=0)
+
+        if verbose >= VerboseLevel.PRINT:
+            print(f"Saved GIF at {filename}.")
+        if verbose >= VerboseLevel.DISPLAY:
+            IPython.display.display(IPython.display.Image(filename=filename))
 
 
 class DataTransformer:
