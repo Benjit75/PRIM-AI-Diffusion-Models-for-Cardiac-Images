@@ -202,8 +202,12 @@ class ModelPreprocessor:
             one_hot_encode=one_hot_encode,
             verbose=verbose
         )
+        normalized_images = self.normalize_images(
+            images=one_hot_encoded_images,
+            verbose=verbose
+        )
 
-        return one_hot_encoded_images
+        return normalized_images
 
 
 class Diffusion:
@@ -298,8 +302,9 @@ class Diffusion:
 
         return sqrt_alpas_cumprod_t * batch_x0 + sqrt_one_minus_alphas_cumprod_t * noise
 
+    @staticmethod
     @torch.no_grad()
-    def p_sample(self, constants_dict: dict[str, Union[Tensor, float]], batch_xt: Tensor, predicted_noise: Tensor,
+    def p_sample(constants_dict: dict[str, Union[Tensor, float]], batch_xt: Tensor, predicted_noise: Tensor,
                  batch_t: Tensor) -> Tensor:
         """
         Sample one step ahead from the model
@@ -310,11 +315,11 @@ class Diffusion:
         :return: Sampled images one step ahead
         """
         # Extract constants and move to the correct device
-        betas_t = self.extract(constants_dict['betas'], batch_t, batch_xt.shape)
-        sqrt_one_minus_alphas_cumprod_t = self.extract(constants_dict['sqrt_one_minus_alphas_cumprod'], batch_t,
+        betas_t = Diffusion.extract(constants_dict['betas'], batch_t, batch_xt.shape)
+        sqrt_one_minus_alphas_cumprod_t = Diffusion.extract(constants_dict['sqrt_one_minus_alphas_cumprod'], batch_t,
                                                        batch_xt.shape)
-        sqrt_recip_alphas_t = self.extract(constants_dict['sqrt_recip_alphas'], batch_t, batch_xt.shape)
-        posterior_variance_t = self.extract(constants_dict['posterior_variance'], batch_t, batch_xt.shape)
+        sqrt_recip_alphas_t = Diffusion.extract(constants_dict['sqrt_recip_alphas'], batch_t, batch_xt.shape)
+        posterior_variance_t = Diffusion.extract(constants_dict['posterior_variance'], batch_t, batch_xt.shape)
 
         # Calculate model mean
         model_mean = sqrt_recip_alphas_t * (batch_xt - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t)
@@ -329,8 +334,9 @@ class Diffusion:
 
         return predicted_image
 
+    @staticmethod
     @torch.no_grad()
-    def sampling(self, model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
+    def sampling(model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
                  constants_dict: dict[str, Union[Tensor, float]], device: torch.device,
                  start: Optional[Tensor] = None, verbose: VerboseLevel = VerboseLevel.TQDM) -> list[Tensor]:
         """
@@ -355,13 +361,14 @@ class Diffusion:
                       total=timesteps):
             batch_t -= 1
             predicted_noise = model(batch_xt, batch_t)
-            batch_xt = self.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
+            batch_xt = Diffusion.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
             imgs.append(batch_xt.cpu())
 
         return imgs
 
+    @staticmethod
     @torch.no_grad()
-    def sampling(self, model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
+    def sampling(model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
                  constants_dict: dict[str, Union[Tensor, float]], device: torch.device,
                  start: Optional[Tensor]=None, verbose: VerboseLevel=VerboseLevel.TQDM) -> list[Tensor]:
         """
@@ -392,8 +399,8 @@ class Diffusion:
             batch_t -= 1
             predicted_noise = model(batch_xt, batch_t)
 
-            batch_xt = self.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
-            batch_xt = self.normalize_batch_images(batch_xt, verbose=VerboseLevel.NONE) # too much verbosity else
+            batch_xt = Diffusion.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
+            batch_xt = Diffusion.normalize_batch_images(batch_xt, verbose=VerboseLevel.NONE) # too much verbosity else
 
             imgs.append(batch_xt.cpu())
 
@@ -423,14 +430,23 @@ class DiffusionModelTrainer:
                  model: nn.Module,
                  criterion: nn.Module,
                  optimizer: torch.optim.Optimizer,
-                 device: torch.device
+                 device: torch.device,
+                 image_filename: Optional[str] = None,
+                 verbose: VerboseLevel=VerboseLevel.TQDM
                 ):
         self.batch_size = batch_size
-        self.train_loader, self.val_loader, self.unused_images = self.split_train_val(data_set, val_split, batch_size)
+        self.train_loader, self.val_loader, self.unused_images = self.split_train_val(
+            data_set=data_set,
+            val_split=val_split,
+            batch_size=batch_size,
+            filename=image_filename,
+            verbose=verbose
+        )
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
         self.device = device
+        self.verbose = verbose
 
     @staticmethod
     def split_train_val(data_set: list[np.ndarray], val_split: float, batch_size: int, filename: Optional[str]=None,
@@ -471,15 +487,15 @@ class DiffusionModelTrainer:
 
         if verbose >= VerboseLevel.DISPLAY or filename is not None:
             # Display examples of the train and validation sets
-            filename_train = filename.format('_train-example.jpg') if filename is not None else None
-            filename_val = filename.format('_val-example.jpg') if filename is not None else None
+            filename_train = filename.format('train-example.jpg') if filename is not None else None
+            filename_val = filename.format('val-example.jpg') if filename is not None else None
             train_batch_example = next(iter(train_dataloader))
             val_batch_example = next(iter(val_dataloader))
             DataDisplayer.display_batch(train_batch_example, grid_shape=grid_shape, show=verbose >= VerboseLevel.DISPLAY,
                                         filename=filename_train, title='Train batch example',
                                         one_hot_encode=one_hot_encode)
             DataDisplayer.display_batch(val_batch_example, grid_shape=grid_shape, show=verbose >= VerboseLevel.DISPLAY,
-                                        filename=filename_val, title='Train batch example',
+                                        filename=filename_val, title='Validation batch example',
                                         one_hot_encode=one_hot_encode)
 
         return train_dataloader, val_dataloader, unused_images
@@ -529,10 +545,10 @@ class DiffusionModelTrainer:
         if save_model_path is not None:
             torch.save(best_model_state, save_model_path.format(f'best-epoch-{best_epoch}'))
 
-        self.monitor_training(history=history, best_epoch=best_epoch, save_images_path=save_images_path, logscale=False,
-                              verbose=verbose)
-        self.monitor_training(history=history, best_epoch=best_epoch, save_images_path=save_images_path, logscale=True,
-                              verbose=verbose)
+        self.monitor_training(n_epochs=epochs, history=history, best_epoch=best_epoch, save_images_path=save_images_path,
+                              logscale=False, verbose=verbose)
+        self.monitor_training(n_epochs=epochs, history=history, best_epoch=best_epoch, save_images_path=save_images_path,
+                              logscale=True, verbose=verbose)
         return history
 
     def train_epoch(self, timesteps: int, epoch: int, constants_dict: dict[str, Union[Tensor, float]],
@@ -603,10 +619,11 @@ class DiffusionModelTrainer:
         return val_loss
 
     @staticmethod
-    def monitor_training(history: dict[int, dict[str, float]], best_epoch: int, save_images_path: Optional[str],
-                         logscale: bool, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
+    def monitor_training(n_epochs: int, history: dict[int, dict[str, float]], best_epoch: int,
+                         save_images_path: Optional[str], logscale: bool, verbose: VerboseLevel=VerboseLevel.TQDM) -> None:
         """
         Monitor the training by plotting the losses
+        :param n_epochs: Number of epochs
         :param history: Training history with train and validation losses
         :param best_epoch: Best epoch
         :param save_images_path: Path to save the loss graph
@@ -614,58 +631,158 @@ class DiffusionModelTrainer:
         :param verbose: Verbosity level to display tqdm progress bar
         :return: Training history with train and validation losses
         """
-        train_losses = np.array([history[epoch]['train_loss'] for epoch in history])
-        val_losses = np.array([history[epoch]['val_loss'] for epoch in history])
-        epochs = np.array(history.keys())
+        epochs = np.arange(1, n_epochs + 1)
+        train_losses = np.array([history[epoch]['train_loss'] for epoch in epochs])
+        val_losses = np.array([history[epoch]['val_loss'] for epoch in epochs])
 
-        # After training, plot the train and validation losses
-        plt.figure(figsize=(10, 6))
-        plt.plot(epochs, train_losses, label='Train Loss', color='blue')
-        plt.plot(epochs, val_losses, label='Validation Loss', color='red')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss Over Epochs')
-        plt.legend()
-        plt.grid(True)
-        if save_images_path is not None:
-            plt.savefig(save_images_path.format('_loss-monitoring.jpg'))
-        if verbose >= VerboseLevel.DISPLAY:
-            plt.show()
-        else:
-            plt.close()
-
-        # Log-scale
         fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
 
         ax.plot(epochs, train_losses, label='Train Loss', color='blue')
         ax.plot(epochs, val_losses, label='Validation Loss', color='red')
 
-        ax.scatter(x=best_epoch, y=val_losses[best_epoch], label='Best Epoch', color='k', marker='x', zorder=2)
-        ax.vlines(x=best_epoch, ymin=-1, ymax=val_losses[best_epoch], colors='green', linestyles='dotted')
-        ax.hlines(xmin=-10, xmax=best_epoch, y=val_losses[best_epoch], colors='green', linestyles='dotted')
+        ax.scatter(x=best_epoch, y=val_losses[best_epoch-1], label='Best Epoch', color='k', marker='x', zorder=2)
+        ax.vlines(x=best_epoch, ymin=-1, ymax=val_losses[best_epoch-1], colors='green', linestyles='dotted')
+        ax.hlines(xmin=-10, xmax=best_epoch, y=val_losses[best_epoch-1], colors='green', linestyles='dotted')
 
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         if logscale:
             plt.yscale('log')
         x_ticks = np.append(ax.get_xticks(), best_epoch)
-        y_ticks = np.append(ax.get_yticks(), val_losses[best_epoch])
+        y_ticks = np.append(ax.get_yticks(), val_losses[best_epoch-1])
         ax.set_xticks(x_ticks)
         ax.set_yticks(y_ticks)
         ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter())
-        plt.xlim(-5, epochs[-1] + 5)
+        plt.xlim(0, epochs[-1] + 1)
         if logscale:
             plt.ylim(10 ** np.floor(np.log10(min(val_losses.min(), train_losses.min()))),
                      10 ** np.ceil(np.log10(max(val_losses.max(), train_losses.max()))))
         else:
-            plt.ylim(-0.1, max(val_losses.max(), train_losses.max()) + 0.1)
-        plt.title('Training and Validation Loss Over Epochs (log-scale)')
+            plt.ylim(min(val_losses.min(), train_losses.min())-0.1, max(val_losses.max(), train_losses.max()) + 0.1)
+        plt.title('Training and Validation Loss Over Epochs' + ' (log-scale)' if logscale else '')
         plt.legend()
         plt.grid(which='both', axis='both')
         if save_images_path is not None:
-            plt.savefig(save_images_path.format('_loss-monitoring' + ('-log.jpg' if logscale else '.jpg')))
+            plt.savefig(save_images_path.format('loss-monitoring' + ('-log.jpg' if logscale else '.jpg')))
         if verbose >= VerboseLevel.DISPLAY:
             plt.show()
         else:
             plt.close()
+
+
+class DiffusionModelSampler:
+    """ Class to sample images from the model """
+
+    def __init__(self, path_params: str, path_model: str, device: torch.device, model_class: nn.Module.__class__,
+                 model_params: Optional[dict[str, Union[str, int, float]]]=None,
+                 constants_scheduler: Callable[[int], Tensor]=Diffusion.cosine_beta_schedule,
+                 verbose: VerboseLevel=VerboseLevel.PRINT):
+        self.params = self.load_params(path_params, verbose)
+        self.model_params = self.define_model_params(self.params, model_params)
+        self.model = self.load_model(path_model, device, model_class, model_params, verbose)
+        self.device = device
+        self.constants_dict = Diffusion.get_alph_bet(self.params['T'], constants_scheduler)
+        self.verbose = verbose
+
+    def load_params(self, path_params: str, verbose: VerboseLevel=VerboseLevel.PRINT)\
+            -> dict[str, Union[str, int, float, bool, Tuple]]:
+        """ Retrieve the parameters from the file
+        :param path_params: Path to the parameters file
+        :param verbose: Verbosity level to display tqdm progress bar and print information
+        :return: Loaded parameters
+        """
+
+        # Load parameters from file
+        params = {}
+
+        with open(path_params, "r") as file:
+            for line in file:
+                # Strip any whitespace and split key-value pairs
+                key, value = line.strip().split(" = ")
+                # Convert the value back to its original type (e.g., int, float, list, etc.)
+                try:
+                    params[key] = eval(value)
+                except:
+                    params[key] = value
+        if verbose >= VerboseLevel.PRINT:
+            print(f"Parameters loaded from '{path_params}'\n")
+            # Display loaded parameters
+            print("Loaded Parameters:")
+            for key, value in params.items():
+                print(f"- {key}: {value} {type(value)}")
+
+        self.assert_valid_diffusion_params(params)
+        return params
+
+    @staticmethod
+    def assert_valid_diffusion_params(params: dict[str, Union[str, int, float, bool, Tuple]]) -> None:
+        """ Assert that the parameters are valid for the diffusion model
+        :param params: Parameters loaded from the file
+        """
+
+        # Should have the following keys: 'T': int, 'IMAGE_SIZE': int, 'CHANNELS': int, 'DIM_MULTS': Tuple[int], 'BATCH_SIZE': int
+        assert 'T' in params and isinstance(params['T'], int), "Missing key 'T' or invalid type in the parameters file"
+        assert 'IMAGE_SIZE' in params and isinstance(params['IMAGE_SIZE'], int), "Missing key 'IMAGE_SIZE' or invalid type in the parameters file"
+        assert 'CHANNELS' in params and isinstance(params['CHANNELS'], int), "Missing key 'CHANNELS' or invalid type in the parameters file"
+        assert 'DIM_MULTS' in params and isinstance(params['DIM_MULTS'], tuple), "Missing key 'DIM_MULTS' or invalid type in the parameters file"
+        assert 'BATCH_SIZE' in params and isinstance(params['BATCH_SIZE'], int), "Missing key 'BATCH_SIZE' or invalid type in the parameters file"
+
+    @staticmethod
+    def define_model_params(params: dict[str, Union[str, int, float, bool]],
+                            model_params: Optional[dict[str, Union[str, int, float]]]=None) -> dict[str, Union[str, int, float]]:
+        """
+        Define the model parameters
+        :param params: Parameters loaded from the file
+        :param model_params: Parameters of the model
+        :return: Model parameters
+        """
+        # Define the model parameters
+        for key, value in {'IMAGE_SIZE': 'dim', 'CHANNELS': 'channels', 'DIM_MULTS': 'dim_mults'}.items():
+            if key in params:
+                model_params[value] = params[key]
+        return model_params
+
+    @staticmethod
+    def load_model(path_model: str, device: torch.device, model_class: nn.Module.__class__,
+                   model_params: Optional[dict[str, Union[str, int, float]]]=None,
+                   verbose: VerboseLevel=VerboseLevel.PRINT) -> nn.Module:
+        """
+        Load the model from the path
+        :param path_model: Path to the model
+        :param model_name: Name of the model
+        :param device: Device to use for the model
+        :param model_class: Class of the model
+        :param model_params: Parameters of the model
+        :param verbose: Verbosity level to display tqdm progress bar and print information
+        :return: Loaded model
+        """
+        model = model_class(**model_params).to(device)
+        model.load_state_dict(torch.load(path_model, weights_only=True, map_location=torch.device(device)))
+        model.eval()
+        if verbose >= VerboseLevel.PRINT:
+            print(f"Model loaded from '{path_model}'")
+        return model
+
+    def sample_images(self, start: Optional[Tensor]=None, verbose: Optional[VerboseLevel]=None) -> list[Tensor]:
+        """
+        Sample images from the model
+        :param start: Start tensor to use for the sampling, if None, start from random noise (see Diffusion.sampling)
+        :param save_final_sample: Whether to save the final sample or not
+        :param save_gif: Whether to save the gif or not
+        :param verbose: Verbosity level to display tqdm progress bar and print information
+        :return: Sampled images
+        """
+        if verbose is None:
+            verbose = self.verbose
+        list_imgs_sampled = Diffusion.sampling(
+            model=self.model,
+            shape=(self.params['BATCH_SIZE'], self.params['CHANNELS'], self.params['IMAGE_SIZE'], self.params['IMAGE_SIZE']),
+            timesteps=self.params['T'],
+            constants_dict=self.constants_dict,
+            device=self.device,
+            start=start,
+            verbose=verbose
+        )
+
+        return list_imgs_sampled
