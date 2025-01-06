@@ -3,5 +3,5 @@
 .idea/
 **/__pycache__/
 **checkpoints**
-/src/images/*.gif.*
-/src/models/trained_models/*pt
+*.gif.*
+*.pt

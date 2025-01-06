@@ -12,8 +12,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader as TorchDataLoader, random_split, Subset
 from tqdm.notebook import tqdm
 
-from src.data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
-from src.utils.utils import VerboseLevel, min_max_scaling
+from data_manager.datamanager import DataLoader, DataDisplayer, DataTransformer
+from utils.utils import VerboseLevel, min_max_scaling
 
 
 class ModelPreprocessor:
