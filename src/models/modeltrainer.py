@@ -314,23 +314,34 @@ class Diffusion:
         :param batch_t: batch of timesteps
         :return: Sampled images one step ahead
         """
-        # Extract constants and move to the correct device
-        betas_t = Diffusion.extract(constants_dict['betas'], batch_t, batch_xt.shape)
-        sqrt_one_minus_alphas_cumprod_t = Diffusion.extract(constants_dict['sqrt_one_minus_alphas_cumprod'], batch_t,
-                                                       batch_xt.shape)
-        sqrt_recip_alphas_t = Diffusion.extract(constants_dict['sqrt_recip_alphas'], batch_t, batch_xt.shape)
+        # We first get every constants needed and send them in right device
+        betas_t = Diffusion.extract(constants_dict['betas'], batch_t, batch_xt.shape).to(batch_xt.device)
+        sqrt_one_minus_alphas_cumprod_t = Diffusion.extract(
+            constants_dict['sqrt_one_minus_alphas_cumprod'], batch_t, batch_xt.shape
+        ).to(batch_xt.device)
+        sqrt_recip_alphas_t = Diffusion.extract(
+            constants_dict['sqrt_recip_alphas'], batch_t, batch_xt.shape
+        ).to(batch_xt.device)
+
+        # Equation 11 in the ddpm paper
+        # Use predicted noise to predict the mean (mu theta)
+        model_mean = sqrt_recip_alphas_t * (
+                batch_xt - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t
+        )
+
+        # We have to be careful to not add noise if we want to predict the final image
+        predicted_image = torch.zeros(batch_xt.shape).to(batch_xt.device)
+        t_zero_index = (batch_t == torch.zeros(batch_t.shape).to(batch_xt.device))
+
+        # Algorithm 2 line 4, we add noise when timestep is not 1:
         posterior_variance_t = Diffusion.extract(constants_dict['posterior_variance'], batch_t, batch_xt.shape)
+        noise = torch.randn_like(batch_xt)  # create noise, same shape as batch_x
+        predicted_image[~t_zero_index] = model_mean[~t_zero_index] + (
+                torch.sqrt(posterior_variance_t[~t_zero_index]) * noise[~t_zero_index]
+        )
 
-        # Calculate model mean
-        model_mean = sqrt_recip_alphas_t * (batch_xt - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t)
-
-        # Initialize predicted image
-        predicted_image = model_mean.clone()
-        t_zero_index = (batch_t == 0)
-
-        # Add noise if t != 0
-        noise = torch.randn_like(batch_xt)
-        predicted_image[~t_zero_index] += torch.sqrt(posterior_variance_t[~t_zero_index]) * noise[~t_zero_index]
+        # If t=1 we don't add noise to mu
+        predicted_image[t_zero_index] = model_mean[t_zero_index]
 
         return predicted_image
 
@@ -339,38 +350,6 @@ class Diffusion:
     def sampling(model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
                  constants_dict: dict[str, Union[Tensor, float]], device: torch.device,
                  start: Optional[Tensor] = None, verbose: VerboseLevel = VerboseLevel.TQDM) -> list[Tensor]:
-        """
-        Sampling method to create images from diffusion model
-        :param model: trained diffusion model to use
-        :param shape: shape of images in the format batch x channels x height x width
-        :param timesteps: Number of timesteps
-        :param constants_dict: Constants to use for the diffusion process
-        :param device: torch device to use for the computation
-        :param start: optional tensor of shape 'shape', if none passed, start the diffusion from random noise
-        :param verbose: Verbosity to use in order to display tqdm progress bar or not
-        :return: list of tensor representing one batch of images sampled during all timesteps
-        """
-        # Start from pure noise if no start tensor is provided
-        batch_xt = torch.randn(shape, device=device) if start is None else start.clone()
-
-        batch_t = torch.full((shape[0],), timesteps, dtype=torch.int64, device=device)
-
-        imgs = []
-
-        for t in tqdm(reversed(range(timesteps)), disable=verbose < VerboseLevel.TQDM, desc='sampling loop time step',
-                      total=timesteps):
-            batch_t -= 1
-            predicted_noise = model(batch_xt, batch_t)
-            batch_xt = Diffusion.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
-            imgs.append(batch_xt.cpu())
-
-        return imgs
-
-    @staticmethod
-    @torch.no_grad()
-    def sampling(model: nn.Module, shape: Tuple[int, int, int, int], timesteps: int,
-                 constants_dict: dict[str, Union[Tensor, float]], device: torch.device,
-                 start: Optional[Tensor]=None, verbose: VerboseLevel=VerboseLevel.TQDM) -> list[Tensor]:
         """
         Sampling method to create images from diffusion model
         :param model: trained diffusion model to use
@@ -394,15 +373,14 @@ class Diffusion:
 
         imgs = []
 
-        for t in tqdm(reversed(range(0, timesteps)), disable=verbose<VerboseLevel.TQDM, desc='sampling loop time step',
-                      total=timesteps):
+        for t in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps,
+                      disable=verbose < VerboseLevel.TQDM):
             batch_t -= 1
             predicted_noise = model(batch_xt, batch_t)
 
             batch_xt = Diffusion.p_sample(constants_dict, batch_xt, predicted_noise, batch_t)
-            batch_xt = Diffusion.normalize_batch_images(batch_xt, verbose=VerboseLevel.NONE) # too much verbosity else
 
-            imgs.append(batch_xt.cpu())
+            imgs.append(Diffusion.normalize_batch_images(batch_xt, verbose=VerboseLevel.NONE).cpu())
 
         return imgs
 
