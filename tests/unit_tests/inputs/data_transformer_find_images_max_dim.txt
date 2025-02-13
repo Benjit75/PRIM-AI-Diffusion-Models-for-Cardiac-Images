@@ -1,0 +1,4 @@
+{'data_names': ['test'], 'image_types': ['image_data'], 'image_names': ['ES', 'ES_gt']}
+{'data_names': ['test', 'train'], 'image_names': ['ED']}
+{'data_names': ['train'], 'image_types': ['image_data_resized']}
+{'group_names': ['NOR']}
