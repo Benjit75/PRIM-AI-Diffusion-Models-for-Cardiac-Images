@@ -1,0 +1,12 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Ternot"
+  given-names: "Benjamin"
+- family-names: "Lacroix"
+  given-names: "Louis"
+title: "PRIM-AI-Diffusion-Models-for-Cardiac-Images"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2025-02-26
+url: "https://github.com/Benjit75/PRIM-AI-Diffusion-Models-for-Cardiac-Images"
